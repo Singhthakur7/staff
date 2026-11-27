@@ -114,16 +114,20 @@ export interface PunchLogRecord {
   fromLocation: string;
   toLocation: string;
   workTime: string;
-  departTime: string; // ISO timestamp (or legacy HH:mm)
-  arriveTime: string; // ISO timestamp (or legacy HH:mm)
-  workCompletedTime?: string; // ISO timestamp
+  departTime: string; // ISO timestamp (Stage 1: Office Departure)
+  arriveTime: string; // ISO timestamp (Stage 2: Site Arrival)
+  workCompletedTime?: string; // ISO timestamp (Stage 3: Work Completed)
+  workCompleted?: boolean;
+  workCompletionNote?: string;
   punchInTime: string; // ISO timestamp
-  punchOutTime?: string; // ISO timestamp
+  punchOutTime?: string; // ISO timestamp (Stage 3: Punch-Out)
   dutyStage?: DutyStage;
   totalDurationText?: string; // HH:MM
   status: 'active' | 'completed';
   dutyWage: number;
   selfieUrl: string;
+  departSelfieUrl?: string;
+  arriveSelfieUrl?: string;
   punchOutSelfieUrl?: string;
   gpsLat?: number;
   gpsLng?: number;

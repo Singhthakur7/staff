@@ -153,12 +153,12 @@ export function getDutyStageInfo(log: PunchLogRecord): DutyStageMeta {
   if (log.status === 'completed' || log.punchOutTime || log.dutyStage === 'punched_out') {
     return {
       stage: 'punched_out',
-      label: 'Punched Out',
-      labelMl: 'പഞ്ച്-ഔട്ട് ചെയ്തു',
-      badgeClass: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-600/15',
+      label: log.workCompleted ? 'Work Completed & Punched Out' : 'Punched Out',
+      labelMl: 'വർക്ക് പൂർത്തിയായി • പഞ്ച്-ഔട്ട്',
+      badgeClass: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20',
     };
   }
-  if (log.workCompletedTime || log.dutyStage === 'work_completed') {
+  if (log.workCompletedTime || log.workCompleted || log.dutyStage === 'work_completed') {
     return {
       stage: 'work_completed',
       label: 'Work Completed',
@@ -169,7 +169,7 @@ export function getDutyStageInfo(log: PunchLogRecord): DutyStageMeta {
   if (log.arriveTime || log.dutyStage === 'arrived') {
     return {
       stage: 'arrived',
-      label: 'On Site / Arrived',
+      label: 'Site Arrival Logged',
       labelMl: 'സൈറ്റിൽ എത്തി',
       badgeClass: 'bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-600/20',
     };
@@ -177,8 +177,8 @@ export function getDutyStageInfo(log: PunchLogRecord): DutyStageMeta {
   if (log.departTime || log.dutyStage === 'departed') {
     return {
       stage: 'departed',
-      label: 'On the Way / Departed',
-      labelMl: 'യാത്രയിലാണ്',
+      label: 'Office Departure Logged',
+      labelMl: 'ഓഫീസിൽ നിന്ന് പുറപ്പെട്ടു',
       badgeClass: 'bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/25',
     };
   }

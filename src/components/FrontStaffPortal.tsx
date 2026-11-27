@@ -15,7 +15,7 @@ import {
   MapPin,
   Megaphone,
   MessageCircle,
-  PlayCircle,
+  Navigation,
   RefreshCw,
   Rocket,
   ShieldCheck,
@@ -67,8 +67,7 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
     companies,
     companyDataMap,
     registerCompany,
-    loginStaffWithSelfie,
-    punchOutStaffWithSelfie,
+    submitFrontSelfieStage,
     pushToast,
   } = useStaffOnline();
 
@@ -105,13 +104,18 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
   const [staffIdentifier, setStaffIdentifier] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
   const [showStaffPass, setShowStaffPass] = useState(false);
-  const [selfieActionMode, setSelfieActionMode] = useState<'punch_in' | 'punch_out'>('punch_in');
+  const [selfieStage, setSelfieStage] = useState<
+    'office_departure' | 'site_arrival' | 'punch_out' | 'portal_login'
+  >('office_departure');
+  const [workCompletedChecked, setWorkCompletedChecked] = useState(false);
+  const [workCompletionNote, setWorkCompletionNote] = useState('');
   const [punchOutReceipt, setPunchOutReceipt] = useState<{
     staffName: string;
     workTitle: string;
     durationText: string;
     dutyWage: number;
     punchOutTime: string;
+    workCompletionNote?: string;
   } | null>(null);
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
@@ -174,6 +178,19 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
       ) || null
     );
   }, [activeCompanyForLogin, companyDataMap, staffIdentifier]);
+
+  // Auto-guide staff to the next active stage based on their live shift progress
+  useEffect(() => {
+    if (!activeShiftForIdentifier) {
+      setSelfieStage((prev) => (prev === 'portal_login' ? 'portal_login' : 'office_departure'));
+      return;
+    }
+    if (activeShiftForIdentifier.departTime && !activeShiftForIdentifier.arriveTime) {
+      setSelfieStage('site_arrival');
+    } else if (activeShiftForIdentifier.arriveTime && !activeShiftForIdentifier.punchOutTime) {
+      setSelfieStage('punch_out');
+    }
+  }, [activeShiftForIdentifier?.id, activeShiftForIdentifier?.departTime, activeShiftForIdentifier?.arriveTime]);
 
   // Capture GPS silently on mount
   const refreshGps = () => {
@@ -309,45 +326,44 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
       setLoginError('Mandatory Live Front-Camera Selfie is required before proceeding.');
       return;
     }
-    setLoggingIn(true);
-    if (selfieActionMode === 'punch_out') {
-      const res = await punchOutStaffWithSelfie({
-        companyId: activeCompanyForLogin.id,
-        identifier: staffIdentifier.trim(),
-        password: staffPassword,
-        selfieUrl: capturedSelfie,
-        gpsLat,
-        gpsLng,
-        gpsLabel,
-      });
-      setLoggingIn(false);
-      if (!res.ok) {
-        setLoginError(res.error || 'Unable to complete Punch-Out.');
-        return;
-      }
-      setPunchOutReceipt({
-        staffName: res.staffName || 'Staff Member',
-        workTitle: res.workTitle || 'Duty Shift',
-        durationText: res.durationText || '00:00',
-        dutyWage: res.dutyWage || 0,
-        punchOutTime: res.punchOutTime || new Date().toISOString(),
-      });
-      setSelfieActionMode('punch_in');
+    if (selfieStage === 'punch_out' && !workCompletedChecked) {
+      setLoginError('Please check "Work Completed" before confirming Punch-Out.');
       return;
     }
 
-    const res = await loginStaffWithSelfie({
+    setLoggingIn(true);
+    const res = await submitFrontSelfieStage({
       companyId: activeCompanyForLogin.id,
       identifier: staffIdentifier.trim(),
       password: staffPassword,
       selfieUrl: capturedSelfie,
+      stage: selfieStage,
+      workCompleted: selfieStage === 'punch_out' ? workCompletedChecked : undefined,
+      workCompletionNote: selfieStage === 'punch_out' ? workCompletionNote.trim() : undefined,
       gpsLat,
       gpsLng,
       gpsLabel,
     });
     setLoggingIn(false);
+
     if (!res.ok) {
-      setLoginError(res.error || 'Unable to sign in.');
+      setLoginError(res.error || 'Unable to process live selfie check-in.');
+      return;
+    }
+
+    if (selfieStage === 'punch_out') {
+      setPunchOutReceipt({
+        staffName: res.staffName || 'Staff Member',
+        workTitle: res.workTitle || 'Field Site Duty',
+        durationText: res.durationText || '00:00',
+        dutyWage: res.dutyWage || 0,
+        punchOutTime: res.timestamp || new Date().toISOString(),
+        workCompletionNote: res.workCompletionNote,
+      });
+      setWorkCompletedChecked(false);
+      setWorkCompletionNote('');
+      setCapturedSelfie('');
+      setSelfieStage('office_departure');
     }
   };
 
@@ -830,36 +846,54 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
                 </div>
               </div>
 
-              {/* Active Shift Auto-Detected Banner */}
+              {/* Active Shift Auto-Detected 3-Stage Mini Tracker */}
               {activeShiftForIdentifier && (
-                <div className="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                  <div className="space-y-0.5">
-                    <p className="font-bold text-emerald-900 flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      Active Duty Shift Open: {activeShiftForIdentifier.workTitle}
+                <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-3.5 space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-bold text-emerald-900 flex items-center gap-1.5 truncate">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                      Active Shift: {activeShiftForIdentifier.workTitle}
                     </p>
-                    <p className="text-emerald-800 font-mono text-[11px]">
-                      Punched In: {formatTimeIN(activeShiftForIdentifier.punchInTime)} · Stage:{' '}
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold shrink-0">
                       {getDutyStageInfo(activeShiftForIdentifier).label}
-                    </p>
+                    </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setSelfieActionMode('punch_out')}
-                    className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold shrink-0"
-                  >
-                    Switch to Punch-Out
-                  </button>
+                  <div className="grid grid-cols-3 gap-2 text-[11px] bg-white/80 rounded-xl p-2 border border-emerald-200/70">
+                    <div>
+                      <p className="text-[10px] text-slate-500 font-semibold">1. Office Departure</p>
+                      <p className="font-mono font-bold text-[#0F172A]">
+                        {activeShiftForIdentifier.departTime
+                          ? formatTimeIN(activeShiftForIdentifier.departTime)
+                          : 'Pending'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-500 font-semibold">2. Site Arrival</p>
+                      <p className="font-mono font-bold text-[#0F172A]">
+                        {activeShiftForIdentifier.arriveTime
+                          ? formatTimeIN(activeShiftForIdentifier.arriveTime)
+                          : 'Next Step'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-500 font-semibold">3. Punch-Out</p>
+                      <p className="font-mono font-bold text-rose-700">
+                        {activeShiftForIdentifier.punchOutTime
+                          ? formatTimeIN(activeShiftForIdentifier.punchOutTime)
+                          : 'Open'}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
 
               {/* Direct Live Selfie Punch-Out Confirmation Receipt */}
               {punchOutReceipt && (
-                <div className="rounded-2xl bg-[#0B1120] text-white p-4 space-y-2.5 border border-emerald-500/40">
+                <div className="rounded-2xl bg-[#0B1120] text-white p-4 space-y-2 border border-emerald-500/40">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-1.5">
                       <CheckCircle2 className="w-4 h-4" />
-                      Shift Punched-Out &amp; Verified
+                      Work Completed &amp; Punched-Out
                     </span>
                     <span className="text-[11px] font-mono text-slate-300">
                       {formatTimeIN(punchOutReceipt.punchOutTime)}
@@ -876,47 +910,236 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
                       {formatINR(punchOutReceipt.dutyWage)}
                     </span>
                   </p>
+                  {punchOutReceipt.workCompletionNote && (
+                    <p className="text-[11px] text-slate-300 bg-white/5 rounded-lg px-2.5 py-1.5">
+                      Remark: {punchOutReceipt.workCompletionNote}
+                    </p>
+                  )}
                 </div>
               )}
 
-              {/* Prominent Action Mode Toggle: Punch-In & Login vs Punch-Out */}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-slate-600">
-                  Select Live Selfie Action *
-                </label>
-                <div className="grid grid-cols-2 gap-2.5">
+              {/* 3-Stage Site Tracking Selector (Office Departure -> Site Arrival -> Work Completed & Punch-Out) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="block text-xs font-semibold text-slate-600">
+                    Select 3-Stage Site Tracking Action *
+                  </label>
                   <button
                     type="button"
                     onClick={() => {
-                      setSelfieActionMode('punch_in');
+                      setSelfieStage('portal_login');
                       setLoginError('');
                     }}
-                    className={`min-h-[48px] px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
-                      selfieActionMode === 'punch_in'
-                        ? 'bg-[#2563EB] border-[#2563EB] text-white shadow-[0_6px_16px_-6px_rgba(37,99,235,0.6)]'
-                        : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                    className={`text-[11px] font-semibold transition-colors ${
+                      selfieStage === 'portal_login'
+                        ? 'text-[#2563EB] underline'
+                        : 'text-slate-500 hover:text-[#0F172A]'
                     }`}
                   >
-                    <PlayCircle className="w-4 h-4 shrink-0" />
-                    <span>▶️ Punch-In &amp; Login</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelfieActionMode('punch_out');
-                      setLoginError('');
-                    }}
-                    className={`min-h-[48px] px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
-                      selfieActionMode === 'punch_out'
-                        ? 'bg-rose-600 border-rose-600 text-white shadow-[0_6px_16px_-6px_rgba(225,29,72,0.55)]'
-                        : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    <StopCircle className="w-4 h-4 shrink-0" />
-                    <span>⏹️ Punch-Out</span>
+                    Portal Login Only
                   </button>
                 </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {/* Stage 1: Office Departure */}
+                  {(() => {
+                    const logged = Boolean(activeShiftForIdentifier?.departTime);
+                    const selected = selfieStage === 'office_departure';
+                    const isRecommended = !activeShiftForIdentifier;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelfieStage('office_departure');
+                          setLoginError('');
+                        }}
+                        className={`p-3 rounded-xl border text-left transition-all relative ${
+                          selected
+                            ? 'bg-[#2563EB] border-[#2563EB] text-white shadow-[0_6px_16px_-6px_rgba(37,99,235,0.6)]'
+                            : logged
+                              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900 hover:bg-emerald-50'
+                              : isRecommended
+                                ? 'bg-blue-50/60 border-blue-300 text-[#0F172A] ring-2 ring-blue-500/20'
+                                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider opacity-85">
+                            <Rocket className="w-3.5 h-3.5 shrink-0" />
+                            Step 1
+                          </span>
+                          {logged && (
+                            <span
+                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                                selected
+                                  ? 'bg-white/20 text-white'
+                                  : 'bg-emerald-100 text-emerald-700'
+                              }`}
+                            >
+                              ✓ {formatTimeIN(activeShiftForIdentifier?.departTime)}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-extrabold leading-tight">Office Departure</p>
+                        <p
+                          className={`text-[10px] mt-0.5 leading-snug ${
+                            selected ? 'text-blue-100' : 'text-slate-500'
+                          }`}
+                        >
+                          Left Office for Site
+                        </p>
+                      </button>
+                    );
+                  })()}
+
+                  {/* Stage 2: Site Arrival */}
+                  {(() => {
+                    const logged = Boolean(activeShiftForIdentifier?.arriveTime);
+                    const selected = selfieStage === 'site_arrival';
+                    const isNextStep = Boolean(
+                      activeShiftForIdentifier?.departTime && !activeShiftForIdentifier?.arriveTime
+                    );
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelfieStage('site_arrival');
+                          setLoginError('');
+                        }}
+                        className={`p-3 rounded-xl border text-left transition-all relative ${
+                          selected
+                            ? 'bg-sky-600 border-sky-600 text-white shadow-[0_6px_16px_-6px_rgba(2,132,199,0.6)]'
+                            : logged
+                              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900 hover:bg-emerald-50'
+                              : isNextStep
+                                ? 'bg-sky-50 border-sky-400 text-[#0F172A] ring-2 ring-sky-500/30'
+                                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider opacity-85">
+                            <Navigation className="w-3.5 h-3.5 shrink-0" />
+                            Step 2
+                          </span>
+                          {logged ? (
+                            <span
+                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                                selected
+                                  ? 'bg-white/20 text-white'
+                                  : 'bg-emerald-100 text-emerald-700'
+                              }`}
+                            >
+                              ✓ {formatTimeIN(activeShiftForIdentifier?.arriveTime)}
+                            </span>
+                          ) : isNextStep ? (
+                            <span
+                              className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-full ${
+                                selected ? 'bg-white/20 text-white' : 'bg-sky-600 text-white'
+                              }`}
+                            >
+                              Next
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="text-xs font-extrabold leading-tight">Site Arrival</p>
+                        <p
+                          className={`text-[10px] mt-0.5 leading-snug ${
+                            selected ? 'text-sky-100' : 'text-slate-500'
+                          }`}
+                        >
+                          Reached Work Site
+                        </p>
+                      </button>
+                    );
+                  })()}
+
+                  {/* Stage 3: Work Completed & Punch-Out */}
+                  {(() => {
+                    const selected = selfieStage === 'punch_out';
+                    const isNextStep = Boolean(
+                      activeShiftForIdentifier?.arriveTime && !activeShiftForIdentifier?.punchOutTime
+                    );
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelfieStage('punch_out');
+                          setLoginError('');
+                        }}
+                        className={`p-3 rounded-xl border text-left transition-all relative ${
+                          selected
+                            ? 'bg-rose-600 border-rose-600 text-white shadow-[0_6px_16px_-6px_rgba(225,29,72,0.55)]'
+                            : isNextStep
+                              ? 'bg-rose-50 border-rose-400 text-[#0F172A] ring-2 ring-rose-500/25'
+                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider opacity-85">
+                            <StopCircle className="w-3.5 h-3.5 shrink-0" />
+                            Step 3
+                          </span>
+                          {isNextStep && (
+                            <span
+                              className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-full ${
+                                selected ? 'bg-white/20 text-white' : 'bg-rose-600 text-white'
+                              }`}
+                            >
+                              Next
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-extrabold leading-tight">Punch-Out</p>
+                        <p
+                          className={`text-[10px] mt-0.5 leading-snug ${
+                            selected ? 'text-rose-100' : 'text-slate-500'
+                          }`}
+                        >
+                          Work Done &amp; Close
+                        </p>
+                      </button>
+                    );
+                  })()}
+                </div>
               </div>
+
+              {/* Mandatory Work Completed Confirmation Panel (Only for Stage 3 Punch-Out) */}
+              {selfieStage === 'punch_out' && (
+                <div className="rounded-2xl bg-rose-50/70 border border-rose-200 p-4 space-y-3">
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={workCompletedChecked}
+                      onChange={(e) => {
+                        setWorkCompletedChecked(e.target.checked);
+                        setLoginError('');
+                      }}
+                      className="mt-0.5 w-5 h-5 accent-emerald-600 rounded shrink-0"
+                    />
+                    <div className="space-y-0.5">
+                      <p className="text-xs font-extrabold text-[#0F172A]">
+                        Work Completed (Required before Punch-Out) *
+                      </p>
+                      <p className="text-[11px] text-slate-600">
+                        Check this box to confirm all assigned site work is finished. &ldquo;Confirm
+                        &amp; Punch Out&rdquo; stays locked until checked.
+                      </p>
+                    </div>
+                  </label>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      Work Completion Note / Remark (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={workCompletionNote}
+                      onChange={(e) => setWorkCompletionNote(e.target.value)}
+                      placeholder="e.g. All lighting & multi-cam setup packed and handed over"
+                      className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-xs text-[#0F172A]"
+                    />
+                  </div>
+                </div>
+              )}
 
               {loginError && (
                 <div className="rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 text-xs font-medium text-rose-700">
@@ -926,26 +1149,47 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
 
               <button
                 type="submit"
-                disabled={loggingIn || !capturedSelfie || !activeCompanyForLogin}
+                disabled={
+                  loggingIn ||
+                  !capturedSelfie ||
+                  !activeCompanyForLogin ||
+                  (selfieStage === 'punch_out' && !workCompletedChecked)
+                }
                 className={`w-full min-h-[52px] px-5 rounded-2xl disabled:opacity-50 text-white text-sm font-bold flex items-center justify-center gap-2 transition-colors ${
-                  selfieActionMode === 'punch_out'
+                  selfieStage === 'punch_out'
                     ? 'bg-rose-600 hover:bg-rose-700 shadow-[0_8px_20px_-6px_rgba(225,29,72,0.45)]'
-                    : 'bg-[#2563EB] hover:bg-[#1E3A8A] shadow-[0_8px_20px_-6px_rgba(37,99,235,0.45)]'
+                    : selfieStage === 'site_arrival'
+                      ? 'bg-sky-600 hover:bg-sky-700 shadow-[0_8px_20px_-6px_rgba(2,132,199,0.45)]'
+                      : 'bg-[#2563EB] hover:bg-[#1E3A8A] shadow-[0_8px_20px_-6px_rgba(37,99,235,0.45)]'
                 }`}
               >
-                {selfieActionMode === 'punch_out' ? (
+                {selfieStage === 'punch_out' ? (
                   <>
-                    <StopCircle className="w-4 h-4" />
+                    <CheckCircle2 className="w-4 h-4" />
                     {loggingIn
-                      ? 'Verifying Selfie & Punching Out...'
-                      : `Verify Selfie & Punch-Out (${formatTimeIN(liveNowIso)})`}
+                      ? 'Uploading Selfie & Punching Out...'
+                      : `Confirm & Punch Out (${formatTimeIN(liveNowIso)})`}
                   </>
-                ) : (
+                ) : selfieStage === 'site_arrival' ? (
+                  <>
+                    <Navigation className="w-4 h-4" />
+                    {loggingIn
+                      ? 'Recording Site Arrival...'
+                      : `Log Site Arrival & Enter Portal (${formatTimeIN(liveNowIso)})`}
+                  </>
+                ) : selfieStage === 'portal_login' ? (
                   <>
                     <UserCheck className="w-4 h-4" />
                     {loggingIn
                       ? 'Verifying Selfie & Signing In...'
-                      : `Punch-In & Enter Portal (${formatTimeIN(liveNowIso)})`}
+                      : `Verify Selfie & Enter Portal (${formatTimeIN(liveNowIso)})`}
+                  </>
+                ) : (
+                  <>
+                    <Rocket className="w-4 h-4" />
+                    {loggingIn
+                      ? 'Recording Office Departure...'
+                      : `Log Office Departure & Enter Portal (${formatTimeIN(liveNowIso)})`}
                   </>
                 )}
               </button>

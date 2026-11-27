@@ -11,7 +11,6 @@ import {
   Power,
   Printer,
   QrCode,
-  Save,
   Upload,
   UserPlus,
   X,
@@ -34,6 +33,7 @@ import { downloadElementAsPdf, triggerDirectPrint } from '../../utils/pdfExport'
 import { buildSharedSlipUrl, getSafeOrigin } from '../../utils/router';
 import { uploadToCloudinary } from '../../utils/cloudinary';
 import { FormalSalarySlipSheet } from '../DocumentPreviews';
+import { EditStaffModal } from '../EditStaffModal';
 
 export const AdminSalaryTab: React.FC = () => {
   const {
@@ -51,8 +51,8 @@ export const AdminSalaryTab: React.FC = () => {
 
   const today = getTodayISO();
 
-  // Add/Edit Staff Form
-  const [editingStaffId, setEditingStaffId] = useState<string | null>(null);
+  // Add Staff Form & Edit Staff Modal
+  const [editingModalStaff, setEditingModalStaff] = useState<StaffMember | null>(null);
   const [stName, setStName] = useState('');
   const [stRole, setStRole] = useState(STAFF_ROLES[0]);
   const [stWage, setStWage] = useState('1500');
@@ -92,7 +92,7 @@ export const AdminSalaryTab: React.FC = () => {
 
   const handleStaffNameChange = (val: string) => {
     setStName(val);
-    if (!editingStaffId && activeCompany) {
+    if (activeCompany) {
       setStEmail(val.trim() ? generateStaffEmail(val, activeCompany.slug) : '');
       if (!stUpi && val.trim()) {
         const compact = val.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 14) || 'staff';
@@ -102,7 +102,6 @@ export const AdminSalaryTab: React.FC = () => {
   };
 
   const resetStaffForm = () => {
-    setEditingStaffId(null);
     setStName('');
     setStRole(STAFF_ROLES[0]);
     setStWage('1500');
@@ -112,19 +111,6 @@ export const AdminSalaryTab: React.FC = () => {
     setStUpi('');
     setStPeriodFrom(today);
     setStPeriodTo(addDaysISO(today, 30));
-  };
-
-  const loadStaffForEdit = (s: StaffMember) => {
-    setEditingStaffId(s.id);
-    setStName(s.name);
-    setStRole(s.role);
-    setStWage(String(s.dutyWage));
-    setStPhone(s.phone);
-    setStEmail(s.email);
-    setStPassword(s.password);
-    setStUpi(s.upiId);
-    setStPeriodFrom(s.periodFrom);
-    setStPeriodTo(s.periodTo);
   };
 
   const handleSaveStaff = async (e: React.FormEvent) => {
@@ -145,14 +131,10 @@ export const AdminSalaryTab: React.FC = () => {
       periodTo: stPeriodTo,
     };
 
-    if (editingStaffId) {
-      await updateStaff(editingStaffId, payload);
-    } else {
-      const created = await addStaff(payload);
-      if (created) {
-        setPayStaffId(created.id);
-        setSlipStaffId(created.id);
-      }
+    const created = await addStaff(payload);
+    if (created) {
+      setPayStaffId(created.id);
+      setSlipStaffId(created.id);
     }
     resetStaffForm();
   };
@@ -309,21 +291,13 @@ export const AdminSalaryTab: React.FC = () => {
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div>
               <h2 className="text-sm font-display font-bold text-[#0F172A]">
-                {editingStaffId ? 'Edit Staff Profile' : 'Add Staff Account'}
+                Add Staff Account
               </h2>
               <p className="text-xs text-slate-500">
-                Auto-generates Staff Email, Password, and Salary Period.
+                Auto-generates Staff Email, Password, and Salary Period. Click Edit on any staff
+                below to update salary or details anytime.
               </p>
             </div>
-            {editingStaffId && (
-              <button
-                type="button"
-                onClick={resetStaffForm}
-                className="text-xs font-semibold text-slate-500 hover:text-slate-800 inline-flex items-center gap-1"
-              >
-                <X className="w-3.5 h-3.5" /> Cancel
-              </button>
-            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -453,8 +427,8 @@ export const AdminSalaryTab: React.FC = () => {
             type="submit"
             className="w-full min-h-[44px] px-4 rounded-xl bg-[#0F172A] hover:bg-[#1E3A8A] text-white text-xs font-bold inline-flex items-center justify-center gap-2 transition-colors"
           >
-            {editingStaffId ? <Save className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
-            {editingStaffId ? 'Update Staff Account' : 'Add Staff Account'}
+            <UserPlus className="w-4 h-4" />
+            Add Staff Account
           </button>
         </form>
 
@@ -836,8 +810,8 @@ export const AdminSalaryTab: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => loadStaffForEdit(s)}
-                      className="min-h-[36px] px-3 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 inline-flex items-center gap-1"
+                      onClick={() => setEditingModalStaff(s)}
+                      className="min-h-[36px] px-3.5 rounded-xl border border-blue-200 bg-blue-50/70 hover:bg-blue-100 text-xs font-bold text-[#1E3A8A] inline-flex items-center gap-1.5"
                     >
                       <Edit3 className="w-3.5 h-3.5" />
                       Edit
@@ -937,6 +911,15 @@ export const AdminSalaryTab: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Edit Staff Details Modal */}
+      <EditStaffModal
+        staff={editingModalStaff}
+        onClose={() => setEditingModalStaff(null)}
+        onSave={async (staffId, updates) => {
+          await updateStaff(staffId, updates);
+        }}
+      />
     </div>
   );
 };

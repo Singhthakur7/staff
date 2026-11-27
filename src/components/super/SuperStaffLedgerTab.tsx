@@ -1,7 +1,7 @@
-import React from 'react';
-import { Camera, Users } from 'lucide-react';
+import React, { useState } from 'react';
+import { Camera, Edit3, Users } from 'lucide-react';
 import { useStaffOnline } from '../../context/StaffOnlineContext';
-import { CompanyDatabase, CompanyRecord } from '../../types';
+import { CompanyDatabase, CompanyRecord, StaffMember } from '../../types';
 import {
   calculateStaffSummary,
   formatDateIN,
@@ -9,6 +9,7 @@ import {
   formatINR,
   formatTimeIN,
 } from '../../utils/helpers';
+import { EditStaffModal } from '../EditStaffModal';
 
 interface SuperStaffLedgerTabProps {
   company: CompanyRecord | null;
@@ -16,7 +17,8 @@ interface SuperStaffLedgerTabProps {
 }
 
 export const SuperStaffLedgerTab: React.FC<SuperStaffLedgerTabProps> = ({ company, db }) => {
-  const { openLightbox } = useStaffOnline();
+  const { openLightbox, updateStaff } = useStaffOnline();
+  const [editingModalStaff, setEditingModalStaff] = useState<StaffMember | null>(null);
 
   if (!company) {
     return (
@@ -106,11 +108,21 @@ export const SuperStaffLedgerTab: React.FC<SuperStaffLedgerTabProps> = ({ compan
                       )}
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-[11px] text-slate-500">Balance Payable</p>
-                    <p className="text-xl font-mono font-extrabold text-[#1E3A8A] tabular-nums">
-                      {formatINR(sum.netBalancePayable)}
-                    </p>
+                  <div className="flex items-start gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setEditingModalStaff(st)}
+                      className="min-h-[36px] px-3.5 rounded-xl border border-blue-200 bg-blue-50/70 hover:bg-blue-100 text-xs font-bold text-[#1E3A8A] inline-flex items-center gap-1.5 shrink-0"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      Edit
+                    </button>
+                    <div className="text-right">
+                      <p className="text-[11px] text-slate-500">Balance Payable</p>
+                      <p className="text-xl font-mono font-extrabold text-[#1E3A8A] tabular-nums">
+                        {formatINR(sum.netBalancePayable)}
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -191,6 +203,14 @@ export const SuperStaffLedgerTab: React.FC<SuperStaffLedgerTabProps> = ({ compan
           })}
         </div>
       )}
+
+      <EditStaffModal
+        staff={editingModalStaff}
+        onClose={() => setEditingModalStaff(null)}
+        onSave={async (staffId, updates) => {
+          await updateStaff(staffId, updates, company.id);
+        }}
+      />
     </div>
   );
 };

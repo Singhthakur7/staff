@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import {
   Camera,
+  CheckCircle2,
   Edit3,
   ExternalLink,
+  Eye,
+  FileText,
   MapPin,
   Send,
   X,
@@ -31,6 +34,7 @@ export const AdminPunchesTab: React.FC = () => {
   } = useStaffOnline();
 
   const [filterStaffId, setFilterStaffId] = useState('all');
+  const [detailPunch, setDetailPunch] = useState<PunchLogRecord | null>(null);
   const [editingPunch, setEditingPunch] = useState<PunchLogRecord | null>(null);
   const [editWorkTitle, setEditWorkTitle] = useState('');
   const [editFrom, setEditFrom] = useState('');
@@ -81,11 +85,11 @@ export const AdminPunchesTab: React.FC = () => {
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-slate-200/80 rounded-2xl p-4 card-elevated">
         <div>
           <h2 className="text-sm font-display font-bold text-[#0F172A]">
-            Live Selfie &amp; Duty Punch Logs ({visibleLogs.length})
+            3-Stage Live Selfie &amp; Site Attendance Logs ({visibleLogs.length})
           </h2>
           <p className="text-xs text-slate-500">
-            Real-time stage tracking with all 5 auto-recorded timestamps (Punch-In, Departed,
-            Arrived, Work Completed, Punch-Out) and GPS map links.
+            View Office Departure, Site Arrival, and Work Completed &amp; Punch-Out timestamps,
+            selfies, completion remarks, and GPS pins in real time.
           </p>
         </div>
         <select
@@ -109,8 +113,8 @@ export const AdminPunchesTab: React.FC = () => {
             No selfie or duty punches logged yet
           </p>
           <p className="text-xs text-slate-500">
-            Live selfies and 5-step automatic duty timestamps appear here in real time as staff
-            check in and tap milestone buttons.
+            Live selfies and 3-stage site tracking timestamps appear here in real time as staff
+            submit Office Departure, Site Arrival, and Work Completed &amp; Punch-Out.
           </p>
         </div>
       ) : (
@@ -121,20 +125,22 @@ export const AdminPunchesTab: React.FC = () => {
             const punchInMapHref = hasCoords
               ? `https://www.google.com/maps?q=${p.gpsLat},${p.gpsLng}`
               : undefined;
-            const departMapHref = buildGpsMapHref(p.departGps);
+            const departMapHref = buildGpsMapHref(p.departGps) || punchInMapHref;
             const arriveMapHref = buildGpsMapHref(p.arriveGps);
-            const completedMapHref = buildGpsMapHref(p.workCompletedGps);
             const punchOutMapHref = buildGpsMapHref(p.punchOutGps);
             const duration =
               p.totalDurationText ||
               (p.punchOutTime ? formatShiftDuration(p.punchInTime, p.punchOutTime) : '');
 
+            const departSelfie = p.departSelfieUrl || p.selfieUrl;
+            const arriveSelfie = p.arriveSelfieUrl;
+            const punchOutSelfie = p.punchOutSelfieUrl;
+            const isWorkDone = Boolean(p.workCompleted || p.workCompletedTime || p.punchOutTime);
+
             const gpsPins = [
-              { label: 'In', href: punchInMapHref },
-              { label: 'Dep', href: departMapHref },
-              { label: 'Arr', href: arriveMapHref },
-              { label: 'Done', href: completedMapHref },
-              { label: 'Out', href: punchOutMapHref },
+              { label: 'Departure', href: departMapHref },
+              { label: 'Site Arrival', href: arriveMapHref },
+              { label: 'Punch-Out', href: punchOutMapHref },
             ].filter((g): g is { label: string; href: string } => Boolean(g.href));
 
             return (
@@ -142,129 +148,112 @@ export const AdminPunchesTab: React.FC = () => {
                 key={p.id}
                 className="bg-white border border-slate-200/80 rounded-2xl p-4 sm:p-5 card-elevated space-y-3.5"
               >
-                <div className="flex flex-col sm:flex-row gap-4">
-                  {/* Zoomable Live Selfie Thumbnail */}
-                  <div className="flex sm:flex-col gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => p.selfieUrl && openLightbox(p.selfieUrl)}
-                      className="w-28 h-28 rounded-xl overflow-hidden bg-slate-900 border border-slate-200 shrink-0 relative group"
-                    >
-                      {p.selfieUrl ? (
-                        <img
-                          src={p.selfieUrl}
-                          alt={`${p.staffName} selfie`}
-                          referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-slate-500">
-                          <Camera className="w-6 h-6" />
-                        </div>
+                {/* Header */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-[#0F172A] truncate">
+                      {p.staffName}{' '}
+                      <span className="font-normal text-xs text-slate-500">· {p.staffRole}</span>
+                    </p>
+                    <p className="text-xs font-semibold text-[#1E3A8A] truncate">{p.workTitle}</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      <span className="font-mono font-semibold text-slate-700">
+                        {formatDateIN(p.date)}
+                      </span>{' '}
+                      · {p.mode} · {p.fromLocation || '—'} → {p.toLocation || '—'}
+                      {duration && (
+                        <span className="ml-1.5 font-mono font-bold text-emerald-700">
+                          ({duration})
+                        </span>
                       )}
-                      <span className="absolute bottom-1.5 left-1.5 right-1.5 bg-slate-950/75 text-white text-[10px] font-semibold px-2 py-0.5 rounded-md text-center">
-                        {p.type === 'login_selfie' ? 'Selfie Login' : 'Punch-In'}
-                      </span>
-                    </button>
-
-                    {p.punchOutSelfieUrl && (
-                      <button
-                        type="button"
-                        onClick={() => openLightbox(p.punchOutSelfieUrl!)}
-                        className="w-28 h-14 rounded-xl overflow-hidden bg-slate-900 border border-rose-200 shrink-0 relative group"
-                      >
-                        <img
-                          src={p.punchOutSelfieUrl}
-                          alt={`${p.staffName} punch-out selfie`}
-                          referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                        />
-                        <span className="absolute bottom-1 left-1 right-1 bg-rose-900/80 text-white text-[9px] font-bold px-1.5 py-0.5 rounded text-center">
-                          Punch-Out Selfie
-                        </span>
-                      </button>
-                    )}
+                    </p>
                   </div>
-
-                  {/* Details */}
-                  <div className="flex-1 min-w-0 space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold text-[#0F172A] truncate">
-                          {p.staffName}{' '}
-                          <span className="font-normal text-xs text-slate-500">
-                            · {p.staffRole}
-                          </span>
-                        </p>
-                        <p className="text-xs font-semibold text-[#1E3A8A] truncate">
-                          {p.workTitle}
-                        </p>
-                      </div>
-                      <span
-                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold shrink-0 whitespace-nowrap ${stageMeta.badgeClass}`}
-                      >
-                        {stageMeta.label}
-                      </span>
-                    </div>
-
-                    <div className="text-[11px] text-slate-600 space-y-1">
-                      <p>
-                        <span className="text-slate-400">Date &amp; Mode:</span>{' '}
-                        <span className="font-mono font-semibold text-slate-800">
-                          {formatDateIN(p.date)}
-                        </span>{' '}
-                        · <span className="font-semibold text-slate-800">{p.mode}</span>
-                        {duration && (
-                          <span className="ml-2 font-mono font-bold text-emerald-700">
-                            ({duration})
-                          </span>
-                        )}
-                      </p>
-                      <p className="truncate">
-                        <span className="text-slate-400">Route:</span>{' '}
-                        <span className="font-semibold text-slate-800">
-                          {p.fromLocation || '—'} → {p.toLocation || '—'}
-                        </span>
-                      </p>
-                    </div>
-
-                    {/* All 5 Auto-Recorded Timestamps Grid */}
-                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 bg-slate-50 border border-slate-200/80 rounded-xl p-2 text-[10px]">
-                      <div>
-                        <p className="text-slate-400 font-semibold">Punch-In</p>
-                        <p className="font-mono font-bold text-[#0F172A]">
-                          {formatTimeIN(p.punchInTime)}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-slate-400 font-semibold">Departed</p>
-                        <p className="font-mono font-bold text-[#0F172A]">
-                          {p.departTime ? formatTimeIN(p.departTime) : '—'}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-slate-400 font-semibold">Arrived</p>
-                        <p className="font-mono font-bold text-[#0F172A]">
-                          {p.arriveTime ? formatTimeIN(p.arriveTime) : '—'}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-slate-400 font-semibold">Work Done</p>
-                        <p className="font-mono font-bold text-[#0F172A]">
-                          {p.workCompletedTime ? formatTimeIN(p.workCompletedTime) : '—'}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-slate-400 font-semibold">Punch-Out</p>
-                        <p className="font-mono font-bold text-emerald-700">
-                          {p.punchOutTime ? formatTimeIN(p.punchOutTime) : 'Active'}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold shrink-0 whitespace-nowrap ${stageMeta.badgeClass}`}
+                  >
+                    {stageMeta.label}
+                  </span>
                 </div>
 
-                {/* Footer: Wage, All Clickable GPS Map Links & Actions */}
+                {/* 3-Stage Site Tracking Cards (Timestamps + Clickable Stage Selfies) */}
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    {
+                      label: '1. Office Departure',
+                      time: p.departTime || (p.type === 'login_selfie' ? p.punchInTime : ''),
+                      selfie: departSelfie,
+                      accent: 'border-blue-200/80 bg-blue-50/40',
+                    },
+                    {
+                      label: '2. Site Arrival',
+                      time: p.arriveTime,
+                      selfie: arriveSelfie,
+                      accent: 'border-sky-200/80 bg-sky-50/40',
+                    },
+                    {
+                      label: '3. Punch-Out',
+                      time: p.punchOutTime,
+                      selfie: punchOutSelfie,
+                      accent: isWorkDone
+                        ? 'border-emerald-200/80 bg-emerald-50/50'
+                        : 'border-slate-200 bg-slate-50',
+                    },
+                  ].map((st) => (
+                    <div
+                      key={st.label}
+                      className={`rounded-xl border p-2 flex flex-col justify-between gap-2 ${st.accent}`}
+                    >
+                      <div>
+                        <p className="text-[10px] font-bold text-slate-500 leading-tight">
+                          {st.label}
+                        </p>
+                        <p className="text-[11px] font-mono font-extrabold text-[#0F172A] mt-0.5">
+                          {st.time ? formatTimeIN(st.time) : '—'}
+                        </p>
+                      </div>
+                      {st.selfie ? (
+                        <button
+                          type="button"
+                          onClick={() => openLightbox(st.selfie!)}
+                          className="w-full h-20 rounded-lg overflow-hidden bg-slate-900 border border-slate-200 relative group"
+                        >
+                          <img
+                            src={st.selfie}
+                            alt={`${p.staffName} ${st.label}`}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                          />
+                          <span className="absolute bottom-1 right-1 bg-slate-950/75 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded">
+                            Zoom
+                          </span>
+                        </button>
+                      ) : (
+                        <div className="w-full h-20 rounded-lg border border-dashed border-slate-200 bg-white/70 flex flex-col items-center justify-center text-slate-400 text-[10px]">
+                          <Camera className="w-3.5 h-3.5 mb-0.5" />
+                          <span>—</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Work Completed Status + Completion Remark */}
+                {(isWorkDone || p.workCompletionNote) && p.type === 'duty_punch' && (
+                  <div className="rounded-xl bg-emerald-50/80 border border-emerald-200/80 px-3 py-2 text-[11px] flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1 font-bold text-emerald-800">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Work Completed: {isWorkDone ? 'Yes' : 'Pending'}
+                    </span>
+                    {p.workCompletionNote && (
+                      <span className="text-slate-700 inline-flex items-center gap-1">
+                        <FileText className="w-3 h-3 text-emerald-700 shrink-0" />
+                        <span>{p.workCompletionNote}</span>
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Footer: Wage, Clickable GPS Links & Actions */}
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-slate-100">
                   <div className="flex flex-wrap items-center gap-2 text-xs">
                     <span className="font-mono font-extrabold text-[#0F172A] tabular-nums">
@@ -287,20 +276,17 @@ export const AdminPunchesTab: React.FC = () => {
                     ) : (
                       <span className="text-[11px] text-slate-400">{p.gpsLabel || 'No GPS'}</span>
                     )}
-                    {p.selfieUrl && p.selfieUrl.startsWith('http') && (
-                      <a
-                        href={p.selfieUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[11px] font-semibold text-emerald-700 hover:underline inline-flex items-center gap-0.5"
-                      >
-                        Photo
-                        <ExternalLink className="w-2.5 h-2.5" />
-                      </a>
-                    )}
                   </div>
 
                   <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setDetailPunch(p)}
+                      className="h-8 px-2.5 rounded-lg border border-blue-200 bg-blue-50/70 hover:bg-blue-100 text-[11px] font-bold text-[#1E3A8A] inline-flex items-center gap-1"
+                    >
+                      <Eye className="w-3 h-3" />
+                      Details
+                    </button>
                     <button
                       type="button"
                       onClick={() => openEdit(p)}
@@ -322,6 +308,138 @@ export const AdminPunchesTab: React.FC = () => {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Full 3-Stage Attendance Audit Details Modal */}
+      {detailPunch && (
+        <div
+          className="fixed inset-0 z-[90] bg-slate-950/65 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => setDetailPunch(null)}
+        >
+          <div
+            className="bg-white w-full sm:max-w-2xl rounded-t-3xl sm:rounded-2xl border border-slate-200 shadow-2xl max-h-[92vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 bg-[#0B1120] text-white flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-sm sm:text-base font-display font-bold truncate">
+                  3-Stage Site Audit — {detailPunch.staffName}
+                </h3>
+                <p className="text-[11px] text-slate-300 truncate">
+                  {detailPunch.workTitle} · {formatDateIN(detailPunch.date)} ·{' '}
+                  {detailPunch.fromLocation || '—'} → {detailPunch.toLocation || '—'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetailPunch(null)}
+                className="p-1.5 rounded-lg text-slate-300 hover:bg-white/10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {[
+                  {
+                    title: 'Stage 1: Office Departure',
+                    sub: 'Left Office for Site',
+                    time: detailPunch.departTime,
+                    selfie: detailPunch.departSelfieUrl || detailPunch.selfieUrl,
+                    gpsHref:
+                      buildGpsMapHref(detailPunch.departGps) ||
+                      (typeof detailPunch.gpsLat === 'number' &&
+                      typeof detailPunch.gpsLng === 'number'
+                        ? `https://www.google.com/maps?q=${detailPunch.gpsLat},${detailPunch.gpsLng}`
+                        : undefined),
+                  },
+                  {
+                    title: 'Stage 2: Site Arrival',
+                    sub: 'Reached Work Site',
+                    time: detailPunch.arriveTime,
+                    selfie: detailPunch.arriveSelfieUrl,
+                    gpsHref: buildGpsMapHref(detailPunch.arriveGps),
+                  },
+                  {
+                    title: 'Stage 3: Work Done & Out',
+                    sub: detailPunch.workCompleted || detailPunch.punchOutTime ? 'Work Completed ✓' : 'Open',
+                    time: detailPunch.punchOutTime,
+                    selfie: detailPunch.punchOutSelfieUrl,
+                    gpsHref: buildGpsMapHref(detailPunch.punchOutGps),
+                  },
+                ].map((stage) => (
+                  <div
+                    key={stage.title}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 p-3 space-y-2"
+                  >
+                    <div>
+                      <p className="text-xs font-extrabold text-[#0F172A]">{stage.title}</p>
+                      <p className="text-[10px] text-slate-500">{stage.sub}</p>
+                      <p className="text-xs font-mono font-bold text-[#1E3A8A] mt-1">
+                        {stage.time ? formatTimeIN(stage.time) : '—'}
+                      </p>
+                    </div>
+                    {stage.selfie ? (
+                      <button
+                        type="button"
+                        onClick={() => openLightbox(stage.selfie!)}
+                        className="w-full h-36 rounded-xl overflow-hidden bg-slate-900 border border-slate-200"
+                      >
+                        <img
+                          src={stage.selfie}
+                          alt={stage.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                    ) : (
+                      <div className="w-full h-36 rounded-xl border border-dashed border-slate-300 bg-white flex items-center justify-center text-xs text-slate-400">
+                        No selfie recorded
+                      </div>
+                    )}
+                    {stage.gpsHref && (
+                      <a
+                        href={stage.gpsHref}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#2563EB] hover:underline"
+                      >
+                        <MapPin className="w-3 h-3" />
+                        Open GPS Pin
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs space-y-1.5">
+                <p>
+                  <strong className="text-slate-700">Work Completed Status:</strong>{' '}
+                  <span className="font-bold text-emerald-700">
+                    {detailPunch.workCompleted || detailPunch.punchOutTime
+                      ? 'Confirmed Completed'
+                      : 'In Progress'}
+                  </span>
+                </p>
+                <p>
+                  <strong className="text-slate-700">Completion Note / Remark:</strong>{' '}
+                  <span className="text-slate-600">{detailPunch.workCompletionNote || '—'}</span>
+                </p>
+                <p>
+                  <strong className="text-slate-700">Total Duration &amp; Duty Wage:</strong>{' '}
+                  <span className="font-mono font-bold text-[#0F172A]">
+                    {detailPunch.totalDurationText ||
+                      (detailPunch.punchOutTime
+                        ? formatShiftDuration(detailPunch.punchInTime, detailPunch.punchOutTime)
+                        : 'Active')}{' '}
+                    · {formatINR(detailPunch.dutyWage)}
+                  </span>
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -400,8 +518,8 @@ export const AdminPunchesTab: React.FC = () => {
                 </div>
               </div>
               <p className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
-                Recorded live timestamps (Punch-In, Departed, Arrived, Work Completed, Punch-Out)
-                are audit-locked and preserved automatically.
+                Recorded 3-stage timestamps (Office Departure, Site Arrival, Work Completed &amp;
+                Punch-Out) are audit-locked and preserved automatically.
               </p>
               <div className="flex justify-end gap-2 pt-2">
                 <button
