@@ -4,6 +4,7 @@ import {
   Copy,
   Edit3,
   Eye,
+  EyeOff,
   Link2,
   MessageCircle,
   Pause,
@@ -45,6 +46,8 @@ export const MasterCompaniesTab: React.FC = () => {
   const [upi, setUpi] = useState('');
   const [badge, setBadge] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
+  const [adminPass, setAdminPass] = useState('');
+  const [showAdminPass, setShowAdminPass] = useState(false);
   const [creating, setCreating] = useState(false);
 
   // Newly created credentials card
@@ -80,7 +83,15 @@ export const MasterCompaniesTab: React.FC = () => {
   const handleCreateCompany = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !slug.trim() || !adminEmail.trim()) {
-      pushToast({ type: 'error', title: 'Fill Company Name, Slug, and Admin Google Email' });
+      pushToast({ type: 'error', title: 'Fill Company Name, Slug, and Admin Email' });
+      return;
+    }
+    const cleanPass = adminPass.trim();
+    if (cleanPass && cleanPass.length < 6) {
+      pushToast({
+        type: 'error',
+        title: 'Initial password must be at least 6 characters (or leave blank)',
+      });
       return;
     }
     setCreating(true);
@@ -93,11 +104,12 @@ export const MasterCompaniesTab: React.FC = () => {
       upi: upi.trim(),
       badge: (badge.trim() || getCompanyInitials(name)).slice(0, 3).toUpperCase(),
       adminEmail: adminEmail.trim().toLowerCase(),
+      ...(cleanPass ? { adminPass: cleanPass } : {}),
       active: true,
     });
     setCreating(false);
     if (created) {
-      setProvisionedCompany(created);
+      setProvisionedCompany(cleanPass ? { ...created, adminPass: cleanPass } : created);
       setName('');
       setSlug('');
       setTagline('Corporate ERP & Payroll Suite');
@@ -106,6 +118,8 @@ export const MasterCompaniesTab: React.FC = () => {
       setUpi('');
       setBadge('');
       setAdminEmail('');
+      setAdminPass('');
+      setShowAdminPass(false);
     }
   };
 
@@ -116,14 +130,21 @@ export const MasterCompaniesTab: React.FC = () => {
 
   const handleCopyLinksAndCreds = async (c: CompanyProfile) => {
     const { adminUrl, staffUrl } = getCompanyLinks(c);
-    const text = [
+    const lines = [
       `${c.name} — Cloud ERP & Payroll Portals`,
       `Company Admin Panel: ${adminUrl}`,
-      `Authorized Admin Google Email: ${c.adminEmail}`,
-      `Sign in with Google using the email above.`,
-      `Staff Portal Link: ${staffUrl}`,
-    ].join('\n');
-    const ok = await safeCopyText(text);
+      `Authorized Admin Email: ${c.adminEmail}`,
+    ];
+    if (c.adminPass) {
+      lines.push(`Initial Password: ${c.adminPass}`);
+      lines.push(
+        `Verify the email link sent to your inbox once before signing in with Email & Password (or use Continue with Google anytime).`
+      );
+    } else {
+      lines.push(`Sign in using Email & Password (tap "Set up password" on first visit) or Continue with Google.`);
+    }
+    lines.push(`Staff Portal Link: ${staffUrl}`);
+    const ok = await safeCopyText(lines.join('\n'));
     pushToast({
       type: ok ? 'success' : 'error',
       title: ok ? 'Admin & Staff Portal Links Copied' : 'Copy failed',
@@ -132,19 +153,28 @@ export const MasterCompaniesTab: React.FC = () => {
 
   const handleShareCredentialsWA = (c: CompanyProfile) => {
     const { adminUrl, staffUrl } = getCompanyLinks(c);
+    const lines = [
+      `Welcome to *${c.name}* Dedicated Cloud ERP!`,
+      ``,
+      `*Company Admin Panel (Private):*`,
+      adminUrl,
+      `Admin Email: ${c.adminEmail}`,
+    ];
+    if (c.adminPass) {
+      lines.push(`Initial Password: ${c.adminPass}`);
+      lines.push(
+        `Note: Click the verification link sent to your email once before signing in with Email & Password, or tap "Continue with Google".`
+      );
+    } else {
+      lines.push(
+        `Sign in using Email & Password (tap "Set up password" for first-time setup) or Continue with Google.`
+      );
+    }
+    lines.push(``, `*Staff Field Portal Link (Share with your staff):*`, staffUrl);
     openWhatsAppModal({
       phone: c.phone,
       recipientName: c.name,
-      message: [
-        `Welcome to *${c.name}* Dedicated Cloud ERP!`,
-        ``,
-        `*Company Admin Panel (Private):*`,
-        adminUrl,
-        `Sign in with Google Email: ${c.adminEmail}`,
-        ``,
-        `*Staff Field Portal Link (Share with your staff):*`,
-        staffUrl,
-      ].join('\n'),
+      message: lines.join('\n'),
     });
   };
 
@@ -194,8 +224,8 @@ export const MasterCompaniesTab: React.FC = () => {
                   {provisionedCompany.name}
                 </h3>
                 <p className="text-xs text-slate-300 mt-0.5">
-                  Share these dedicated portal URLs with the Company Administrator (Google Sign-In
-                  enabled).
+                  Share these dedicated portal URLs with the Company Administrator (Email/Password
+                  &amp; Google Sign-In enabled).
                 </p>
               </div>
             </div>
@@ -213,8 +243,22 @@ export const MasterCompaniesTab: React.FC = () => {
               <p className="text-[#FBBF24] font-sans font-bold">Company Admin Panel Link</p>
               <p className="break-all text-slate-200">{getCompanyLinks(provisionedCompany).adminUrl}</p>
               <p className="text-slate-400 pt-1">
-                Admin Google Email: <span className="text-white">{provisionedCompany.adminEmail}</span>
+                Admin Email: <span className="text-white">{provisionedCompany.adminEmail}</span>
               </p>
+              {provisionedCompany.adminPass && (
+                <>
+                  <p className="text-slate-400">
+                    Initial Password (shown once):{' '}
+                    <span className="text-emerald-300 font-bold">
+                      {provisionedCompany.adminPass}
+                    </span>
+                  </p>
+                  <p className="text-[11px] text-slate-400 font-sans pt-0.5">
+                    Saved securely in Firebase Auth (never stored in Firestore). Verification link
+                    emailed.
+                  </p>
+                </>
+              )}
             </div>
             <div className="bg-white/5 border border-white/10 rounded-xl p-3.5 space-y-1">
               <p className="text-emerald-300 font-sans font-bold">Staff Portal Link (Public)</p>
@@ -266,7 +310,7 @@ export const MasterCompaniesTab: React.FC = () => {
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
               Creates a strictly isolated Cloud Firestore tenant, dedicated `/c/slug/admin` panel,
-              and `/c/slug` staff portal using Google Sign-In.
+              and `/c/slug` staff portal supporting both Email/Password &amp; Google Sign-In.
             </p>
           </div>
         </div>
@@ -366,18 +410,46 @@ export const MasterCompaniesTab: React.FC = () => {
             />
           </div>
 
-          <div className="sm:col-span-2">
+          <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">
-              Company Admin Google Email *
+              Company Admin Email *
             </label>
             <input
               type="email"
               required
               value={adminEmail}
               onChange={(e) => setAdminEmail(e.target.value)}
-              placeholder="owner@gmail.com"
+              placeholder="owner@company.com"
               className="w-full h-11 px-3.5 rounded-xl border border-slate-300 text-sm font-mono"
             />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">
+              Initial Admin Password (Optional)
+            </label>
+            <div className="relative">
+              <input
+                type={showAdminPass ? 'text' : 'password'}
+                value={adminPass}
+                onChange={(e) => setAdminPass(e.target.value)}
+                placeholder="Min 6 chars (optional)"
+                autoComplete="new-password"
+                className="w-full h-11 pl-3.5 pr-10 rounded-xl border border-slate-300 text-sm font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowAdminPass((prev) => !prev)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700"
+                aria-label={showAdminPass ? 'Hide password' : 'Show password'}
+              >
+                {showAdminPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-1">
+              Sent to Firebase Auth only (never stored in Firestore). Leave blank to let admin set
+              up later or use Google.
+            </p>
           </div>
         </div>
 
@@ -484,7 +556,7 @@ export const MasterCompaniesTab: React.FC = () => {
 
                     <div className="text-xs font-mono text-slate-600 space-y-1">
                       <p className="truncate">
-                        Admin Google Email: <strong>{c.adminEmail}</strong>
+                        Admin Email: <strong>{c.adminEmail}</strong>
                       </p>
                       <p className="truncate text-slate-500">
                         Admin URL: /c/{c.slug}/admin · Staff URL: /c/{c.slug}
@@ -581,7 +653,7 @@ export const MasterCompaniesTab: React.FC = () => {
             <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
               <div>
                 <h3 className="text-base font-bold text-[#0B1120]">
-                  Edit Company &amp; Admin Google Account
+                  Edit Company &amp; Admin Account
                 </h3>
                 <p className="text-xs font-mono text-slate-500">/c/{editingComp.slug}</p>
               </div>
@@ -666,7 +738,7 @@ export const MasterCompaniesTab: React.FC = () => {
 
               <div className="pt-2 border-t border-slate-100">
                 <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  Authorized Company Admin Google Email
+                  Authorized Company Admin Email
                 </label>
                 <input
                   type="email"

@@ -6,7 +6,16 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  User,
+} from 'firebase/auth';
 import {
   collection,
   deleteDoc,
@@ -58,6 +67,7 @@ import {
   handleFirestoreError,
   isFirebaseConfigured,
   OperationType,
+  provisionEmailPasswordAccount,
   sanitizeOptStr,
   sanitizeStr,
   stripUndefined,
@@ -86,6 +96,40 @@ function mapDocWithDates<T extends object>(id: string, raw: DocumentData): T {
   if ('createdAt' in raw) mapped.createdAt = toIsoString(raw.createdAt);
   if ('updatedAt' in raw) mapped.updatedAt = toIsoString(raw.updatedAt);
   return mapped as unknown as T;
+}
+
+function mapFirebaseAuthError(err: unknown): string {
+  const code = (err as { code?: string })?.code || '';
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Invalid email address or password. If this is your first time, create your password account or use Google Sign-In.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters long.';
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists. Switch to Sign In or reset your password.';
+    case 'auth/operation-not-allowed':
+      return 'Email/Password sign-in is not enabled yet in Firebase Console (Authentication → Sign-in method → Email/Password).';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please wait a few minutes before trying again.';
+    case 'auth/popup-closed-by-user':
+    case 'auth/cancelled-popup-request':
+      return 'Google sign-in popup was closed before completing.';
+    case 'auth/popup-blocked':
+      return 'Browser blocked the Google sign-in popup. Please allow popups and try again.';
+    default:
+      return err instanceof Error ? err.message : 'Authentication failed. Please try again.';
+  }
+}
+
+export interface AuthActionResult {
+  ok: boolean;
+  error?: string;
+  info?: string;
+  needsVerification?: boolean;
 }
 
 const SUBCOLLECTIONS = [
@@ -130,11 +174,23 @@ interface ErpContextValue {
   closeGPayModal: () => void;
   openLightbox: (url: string) => void;
   closeLightbox: () => void;
-  // Isolated 3-Tier Google Auth
+  // Isolated 3-Tier Auth (Google + Email/Password)
   signInWithGoogle: (
     portalType: 'master_admin' | 'company_admin' | 'staff',
     companySlug?: string
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<AuthActionResult>;
+  signInWithEmail: (
+    portalType: 'master_admin' | 'company_admin' | 'staff',
+    email: string,
+    password: string,
+    companySlug?: string
+  ) => Promise<AuthActionResult>;
+  registerWithEmail: (
+    email: string,
+    password: string
+  ) => Promise<AuthActionResult>;
+  sendPasswordReset: (email: string) => Promise<AuthActionResult>;
+  resendVerificationEmail: () => Promise<AuthActionResult>;
   logout: () => Promise<void>;
   // Master Admin Operations
   updateMasterConfig: (updates: Partial<MasterAdminConfig>) => Promise<boolean>;
@@ -291,7 +347,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
-      if (!user) {
+      if (!user || !user.emailVerified) {
         setSession(null);
         setInspectingCompanyId(null);
         setCompanies([]);
@@ -316,7 +372,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 3. Subscribe to Master Config & Companies Directory based on authenticated role
   useEffect(() => {
-    if (!firebaseUser || !session) {
+    if (!firebaseUser || !firebaseUser.emailVerified || !session) {
       setCompanies([]);
       return;
     }
@@ -397,7 +453,6 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           },
           (err) => {
             if (!auth.currentUser) return;
-            // If company was suspended/deleted, enforce clean sign-out
             if (err.code === 'permission-denied') {
               setSession(null);
               safeSessionSet(SESSION_STORAGE_KEY, null);
@@ -454,7 +509,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 4. Subscribe strictly to the active company's isolated Firestore subcollections
   useEffect(() => {
-    if (!firebaseUser || !session || !activeCompanyId) {
+    if (!firebaseUser || !firebaseUser.emailVerified || !session || !activeCompanyId) {
       setActiveCompanyData(EMPTY_COMPANY_DB);
       return;
     }
@@ -479,7 +534,6 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         (err) => {
           if (!auth.currentUser) return;
           if (err.code === 'permission-denied') {
-            // Gracefully clear if company/member was just deactivated
             setActiveCompanyData((prev) => ({ ...prev, [subcol]: [] }));
             return;
           }
@@ -624,7 +678,12 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const companyIdsKey = useMemo(() => companies.map((c) => c.id).join(','), [companies]);
 
   useEffect(() => {
-    if (!firebaseUser || session?.role !== 'master_admin' || companies.length === 0) {
+    if (
+      !firebaseUser ||
+      !firebaseUser.emailVerified ||
+      session?.role !== 'master_admin' ||
+      companies.length === 0
+    ) {
       setAllCompanyDatabases({});
       return;
     }
@@ -708,225 +767,340 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   // =========================================================================
-  // 3-TIER ISOLATED GOOGLE AUTHENTICATION
+  // SHARED 3-TIER ROLE AUTHORIZATION GATE (Used by both Google & Email/Pass)
+  // =========================================================================
+
+  const authorizeAuthenticatedUser = useCallback(
+    async (
+      user: User,
+      portalType: 'master_admin' | 'company_admin' | 'staff',
+      companySlug?: string,
+      methodLabel = 'Firebase Auth'
+    ): Promise<AuthActionResult> => {
+      const email = (user.email || '').trim().toLowerCase();
+
+      if (!email) {
+        await signOut(auth);
+        return { ok: false, error: 'A valid email address is required to sign in.' };
+      }
+
+      if (!user.emailVerified) {
+        return {
+          ok: false,
+          needsVerification: true,
+          error: `Your email (${email}) is not verified yet. Please click the verification link in your inbox, then tap Sign In again.`,
+        };
+      }
+
+      // ---- 1. MASTER ADMIN ----
+      if (portalType === 'master_admin') {
+        let isMaster = email === BOOTSTRAPPED_MASTER_EMAIL;
+        if (!isMaster) {
+          try {
+            const adminSnap = await getDoc(doc(db, 'admins', user.uid));
+            isMaster = adminSnap.exists() && adminSnap.data()?.role === 'master_admin';
+          } catch {
+            isMaster = false;
+          }
+        }
+
+        if (!isMaster) {
+          await signOut(auth);
+          pushToast({ type: 'error', title: 'Unauthorized Master Admin Account' });
+          return {
+            ok: false,
+            error: `The account (${email}) does not have Master Administrator privileges.`,
+          };
+        }
+
+        const cfgRef = doc(db, 'system', 'master_config');
+        let brandName = DEFAULT_MASTER_ADMIN.brandName;
+        let supportEmail = email;
+        try {
+          const cfgSnap = await getDoc(cfgRef);
+          if (cfgSnap.exists()) {
+            const d = cfgSnap.data();
+            brandName = String(d.brandName || brandName);
+            supportEmail = String(d.supportEmail || email);
+          } else {
+            await setDoc(cfgRef, {
+              brandName,
+              supportEmail,
+              createdByUid: user.uid,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } catch (err) {
+          reportError(err, OperationType.WRITE, 'system/master_config', false);
+        }
+
+        const next: AuthSession = {
+          role: 'master_admin',
+          userId: user.uid,
+          name: brandName,
+          email,
+        };
+        setMasterConfig({ brandName, supportEmail, email: supportEmail });
+        setSession(next);
+        safeSessionSet(SESSION_STORAGE_KEY, next);
+        setInspectingCompanyId(null);
+        pushToast({
+          type: 'success',
+          title: 'Master Control Center Unlocked',
+          description: 'Live multi-tenant Cloud Firestore oversight active.',
+        });
+        return { ok: true };
+      }
+
+      // ---- 2. COMPANY ADMIN ----
+      if (portalType === 'company_admin') {
+        const q = query(collection(db, 'companies'), where('adminEmail', '==', email));
+        const snap = await getDocs(q);
+        const allMatched = snap.docs.map((d) => mapDocWithDates<CompanyProfile>(d.id, d.data()));
+
+        const matched = companySlug
+          ? allMatched.find((c) => c.slug.toLowerCase() === companySlug.toLowerCase())
+          : allMatched[0];
+
+        if (!matched) {
+          await signOut(auth);
+          pushToast({ type: 'error', title: 'Company Admin Account Not Found' });
+          return {
+            ok: false,
+            error: companySlug
+              ? `Account (${email}) is not assigned as Company Admin for "/c/${companySlug}".`
+              : `Account (${email}) is not registered as a Company Administrator.`,
+          };
+        }
+
+        if (!matched.active) {
+          await signOut(auth);
+          const msg = 'Company Account Suspended — Contact Master Administrator';
+          pushToast({ type: 'error', title: 'Access Suspended', description: msg });
+          return { ok: false, error: msg };
+        }
+
+        const next: AuthSession = {
+          role: 'company_admin',
+          userId: user.uid,
+          companyId: matched.id,
+          name: `${matched.name} Admin`,
+          email,
+        };
+        setCompanies([matched]);
+        setSession(next);
+        safeSessionSet(SESSION_STORAGE_KEY, next);
+        pushToast({
+          type: 'success',
+          title: `Welcome to ${matched.name}`,
+          description: 'Connected to your isolated Company Admin Firestore database.',
+        });
+        return { ok: true };
+      }
+
+      // ---- 3. STAFF PORTAL ----
+      const memQuery = query(collection(db, 'memberships'), where('email', '==', email));
+      const memSnap = await getDocs(memQuery);
+      const memberships = memSnap.docs
+        .map((d) => mapDocWithDates<MembershipRecord>(d.id, d.data()))
+        .filter((m) => m.role === 'staff');
+
+      const matchedMem = companySlug
+        ? memberships.find((m) => m.companySlug.toLowerCase() === companySlug.toLowerCase())
+        : memberships[0];
+
+      if (!matchedMem || !matchedMem.staffId) {
+        await signOut(auth);
+        pushToast({ type: 'error', title: 'Staff Account Not Registered' });
+        return {
+          ok: false,
+          error: companySlug
+            ? `Email (${email}) is not registered as staff for this company portal. Ask your manager to add your email.`
+            : `Email (${email}) is not registered as an employee. Ask your company manager to add your email.`,
+        };
+      }
+
+      if (!matchedMem.companyActive) {
+        await signOut(auth);
+        const msg = 'Your company account is currently suspended. Please contact your manager.';
+        pushToast({ type: 'error', title: 'Company Suspended', description: msg });
+        return { ok: false, error: msg };
+      }
+
+      if (!matchedMem.active) {
+        await signOut(auth);
+        const msg = 'Your staff account has been disabled by your Company Admin.';
+        pushToast({ type: 'error', title: 'Account Disabled', description: msg });
+        return { ok: false, error: msg };
+      }
+
+      const staffSnap = await getDoc(
+        doc(db, 'companies', matchedMem.companyId, 'staff', matchedMem.staffId)
+      );
+      if (!staffSnap.exists()) {
+        await signOut(auth);
+        return { ok: false, error: 'Staff profile record could not be loaded.' };
+      }
+      const staffDoc = mapDocWithDates<StaffAccount>(staffSnap.id, staffSnap.data());
+      if (!staffDoc.active) {
+        await signOut(auth);
+        return { ok: false, error: 'Your staff account has been disabled by your Company Admin.' };
+      }
+
+      const next: AuthSession = {
+        role: 'staff',
+        userId: staffDoc.id,
+        companyId: matchedMem.companyId,
+        name: staffDoc.name,
+        email,
+      };
+      setSession(next);
+      safeSessionSet(SESSION_STORAGE_KEY, next);
+
+      const coords = await getSafeLocation();
+      await pushCompanyNotification(matchedMem.companyId, matchedMem.companyAdminEmail, {
+        type: 'login',
+        title: `Staff Login: ${staffDoc.name}`,
+        message: `${staffDoc.name} (${staffDoc.role}) signed in via ${methodLabel} from ${coords.label} (${coords.lat.toFixed(
+          4
+        )}, ${coords.lng.toFixed(4)}).`,
+        staffId: staffDoc.id,
+        gpsLat: coords.lat,
+        gpsLng: coords.lng,
+      });
+
+      pushToast({
+        type: 'success',
+        title: `Welcome, ${staffDoc.name}`,
+        description: `${matchedMem.companyName} · GPS synced (${coords.label}).`,
+      });
+      return { ok: true };
+    },
+    [pushCompanyNotification, pushToast, reportError]
+  );
+
+  // =========================================================================
+  // 3-TIER ISOLATED AUTHENTICATION METHODS (Google + Email/Password)
   // =========================================================================
 
   const signInWithGoogle: ErpContextValue['signInWithGoogle'] = useCallback(
     async (portalType, companySlug) => {
       try {
         const result = await signInWithPopup(auth, googleProvider);
-        const user = result.user;
-        const email = (user.email || '').trim().toLowerCase();
-
-        if (!email || !user.emailVerified) {
-          await signOut(auth);
-          return {
-            ok: false,
-            error: 'A verified Google account email is required to sign in.',
-          };
-        }
-
-        // ---- 1. MASTER ADMIN ----
-        if (portalType === 'master_admin') {
-          let isMaster = email === BOOTSTRAPPED_MASTER_EMAIL;
-          if (!isMaster) {
-            try {
-              const adminSnap = await getDoc(doc(db, 'admins', user.uid));
-              isMaster = adminSnap.exists() && adminSnap.data()?.role === 'master_admin';
-            } catch {
-              isMaster = false;
-            }
-          }
-
-          if (!isMaster) {
-            await signOut(auth);
-            pushToast({ type: 'error', title: 'Unauthorized Master Admin Account' });
-            return {
-              ok: false,
-              error: `The Google account (${email}) does not have Master Administrator privileges.`,
-            };
-          }
-
-          // Ensure system/master_config exists
-          const cfgRef = doc(db, 'system', 'master_config');
-          let brandName = DEFAULT_MASTER_ADMIN.brandName;
-          let supportEmail = email;
-          try {
-            const cfgSnap = await getDoc(cfgRef);
-            if (cfgSnap.exists()) {
-              const d = cfgSnap.data();
-              brandName = String(d.brandName || brandName);
-              supportEmail = String(d.supportEmail || email);
-            } else {
-              await setDoc(cfgRef, {
-                brandName,
-                supportEmail,
-                createdByUid: user.uid,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              });
-            }
-          } catch (err) {
-            reportError(err, OperationType.WRITE, 'system/master_config', false);
-          }
-
-          const next: AuthSession = {
-            role: 'master_admin',
-            userId: user.uid,
-            name: brandName,
-            email,
-          };
-          setMasterConfig({ brandName, supportEmail, email: supportEmail });
-          setSession(next);
-          safeSessionSet(SESSION_STORAGE_KEY, next);
-          setInspectingCompanyId(null);
-          pushToast({
-            type: 'success',
-            title: 'Master Control Center Unlocked',
-            description: 'Live multi-tenant Cloud Firestore oversight active.',
-          });
-          return { ok: true };
-        }
-
-        // ---- 2. COMPANY ADMIN ----
-        if (portalType === 'company_admin') {
-          const q = query(collection(db, 'companies'), where('adminEmail', '==', email));
-          const snap = await getDocs(q);
-          const allMatched = snap.docs.map((d) => mapDocWithDates<CompanyProfile>(d.id, d.data()));
-
-          const matched = companySlug
-            ? allMatched.find((c) => c.slug.toLowerCase() === companySlug.toLowerCase())
-            : allMatched[0];
-
-          if (!matched) {
-            await signOut(auth);
-            pushToast({ type: 'error', title: 'Company Admin Account Not Found' });
-            return {
-              ok: false,
-              error: companySlug
-                ? `Google account (${email}) is not assigned as Company Admin for "/c/${companySlug}".`
-                : `Google account (${email}) is not registered as a Company Administrator.`,
-            };
-          }
-
-          if (!matched.active) {
-            await signOut(auth);
-            const msg = 'Company Account Suspended — Contact Master Administrator';
-            pushToast({ type: 'error', title: 'Access Suspended', description: msg });
-            return { ok: false, error: msg };
-          }
-
-          const next: AuthSession = {
-            role: 'company_admin',
-            userId: user.uid,
-            companyId: matched.id,
-            name: `${matched.name} Admin`,
-            email,
-          };
-          setCompanies([matched]);
-          setSession(next);
-          safeSessionSet(SESSION_STORAGE_KEY, next);
-          pushToast({
-            type: 'success',
-            title: `Welcome to ${matched.name}`,
-            description: 'Connected to your isolated Company Admin Firestore database.',
-          });
-          return { ok: true };
-        }
-
-        // ---- 3. STAFF PORTAL ----
-        const memQuery = query(collection(db, 'memberships'), where('email', '==', email));
-        const memSnap = await getDocs(memQuery);
-        const memberships = memSnap.docs
-          .map((d) => mapDocWithDates<MembershipRecord>(d.id, d.data()))
-          .filter((m) => m.role === 'staff');
-
-        const matchedMem = companySlug
-          ? memberships.find((m) => m.companySlug.toLowerCase() === companySlug.toLowerCase())
-          : memberships[0];
-
-        if (!matchedMem || !matchedMem.staffId) {
-          await signOut(auth);
-          pushToast({ type: 'error', title: 'Staff Account Not Registered' });
-          return {
-            ok: false,
-            error: companySlug
-              ? `Google account (${email}) is not registered as staff for this company portal. Ask your manager to add your Google email.`
-              : `Google account (${email}) is not registered as an employee. Ask your company manager to add your Google email.`,
-          };
-        }
-
-        if (!matchedMem.companyActive) {
-          await signOut(auth);
-          const msg = 'Your company account is currently suspended. Please contact your manager.';
-          pushToast({ type: 'error', title: 'Company Suspended', description: msg });
-          return { ok: false, error: msg };
-        }
-
-        if (!matchedMem.active) {
-          await signOut(auth);
-          const msg = 'Your staff account has been disabled by your Company Admin.';
-          pushToast({ type: 'error', title: 'Account Disabled', description: msg });
-          return { ok: false, error: msg };
-        }
-
-        const staffSnap = await getDoc(
-          doc(db, 'companies', matchedMem.companyId, 'staff', matchedMem.staffId)
-        );
-        if (!staffSnap.exists()) {
-          await signOut(auth);
-          return { ok: false, error: 'Staff profile record could not be loaded.' };
-        }
-        const staffDoc = mapDocWithDates<StaffAccount>(staffSnap.id, staffSnap.data());
-        if (!staffDoc.active) {
-          await signOut(auth);
-          return { ok: false, error: 'Your staff account has been disabled by your Company Admin.' };
-        }
-
-        const next: AuthSession = {
-          role: 'staff',
-          userId: staffDoc.id,
-          companyId: matchedMem.companyId,
-          name: staffDoc.name,
-          email,
-        };
-        setSession(next);
-        safeSessionSet(SESSION_STORAGE_KEY, next);
-
-        const coords = await getSafeLocation();
-        await pushCompanyNotification(matchedMem.companyId, matchedMem.companyAdminEmail, {
-          type: 'login',
-          title: `Staff Login: ${staffDoc.name}`,
-          message: `${staffDoc.name} (${staffDoc.role}) signed in via Google from ${coords.label} (${coords.lat.toFixed(
-            4
-          )}, ${coords.lng.toFixed(4)}).`,
-          staffId: staffDoc.id,
-          gpsLat: coords.lat,
-          gpsLng: coords.lng,
-        });
-
-        pushToast({
-          type: 'success',
-          title: `Welcome, ${staffDoc.name}`,
-          description: `${matchedMem.companyName} · GPS synced (${coords.label}).`,
-        });
-        return { ok: true };
+        return await authorizeAuthenticatedUser(result.user, portalType, companySlug, 'Google');
       } catch (err: unknown) {
-        const code = (err as { code?: string })?.code || '';
-        if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-          return { ok: false, error: 'Google sign-in popup was closed before completing.' };
-        }
-        if (code === 'auth/popup-blocked') {
-          return {
-            ok: false,
-            error: 'Browser blocked the Google sign-in popup. Please allow popups and try again.',
-          };
-        }
-        const msg = err instanceof Error ? err.message : 'Google authentication failed.';
-        return { ok: false, error: msg };
+        return { ok: false, error: mapFirebaseAuthError(err) };
       }
     },
-    [pushCompanyNotification, pushToast, reportError]
+    [authorizeAuthenticatedUser]
+  );
+
+  const signInWithEmail: ErpContextValue['signInWithEmail'] = useCallback(
+    async (portalType, emailInput, passwordInput, companySlug) => {
+      const email = emailInput.trim().toLowerCase();
+      if (!email || !passwordInput) {
+        return { ok: false, error: 'Please enter both Email ID and Password.' };
+      }
+      try {
+        const cred = await signInWithEmailAndPassword(auth, email, passwordInput);
+        await cred.user.reload();
+        const freshUser = auth.currentUser || cred.user;
+        // Refresh token if user just verified their email link
+        if (freshUser.emailVerified) {
+          await freshUser.getIdToken(true);
+        }
+        return await authorizeAuthenticatedUser(
+          freshUser,
+          portalType,
+          companySlug,
+          'Email & Password'
+        );
+      } catch (err: unknown) {
+        return { ok: false, error: mapFirebaseAuthError(err) };
+      }
+    },
+    [authorizeAuthenticatedUser]
+  );
+
+  const registerWithEmail: ErpContextValue['registerWithEmail'] = useCallback(
+    async (emailInput, passwordInput) => {
+      const email = emailInput.trim().toLowerCase();
+      if (!email || passwordInput.length < 6) {
+        return {
+          ok: false,
+          error: 'Enter a valid email address and a password with at least 6 characters.',
+        };
+      }
+      try {
+        const cred = await createUserWithEmailAndPassword(auth, email, passwordInput);
+        await sendEmailVerification(cred.user);
+        pushToast({
+          type: 'success',
+          title: 'Verification Email Sent',
+          description: `Check ${email} and click the verification link before signing in.`,
+        });
+        return {
+          ok: true,
+          needsVerification: true,
+          info: `Password account created for ${email}! We sent a verification link to your inbox — click it once, then sign in with your Email & Password.`,
+        };
+      } catch (err: unknown) {
+        return { ok: false, error: mapFirebaseAuthError(err) };
+      }
+    },
+    [pushToast]
+  );
+
+  const sendPasswordReset: ErpContextValue['sendPasswordReset'] = useCallback(
+    async (emailInput) => {
+      const email = emailInput.trim().toLowerCase();
+      if (!email) {
+        return { ok: false, error: 'Enter your Email ID above first to receive a password reset link.' };
+      }
+      try {
+        await sendPasswordResetEmail(auth, email);
+        pushToast({
+          type: 'success',
+          title: 'Password Reset Email Sent',
+          description: `Check ${email} for the reset link.`,
+        });
+        return {
+          ok: true,
+          info: `Password reset email sent to ${email}. Check your inbox (and spam folder).`,
+        };
+      } catch (err: unknown) {
+        return { ok: false, error: mapFirebaseAuthError(err) };
+      }
+    },
+    [pushToast]
+  );
+
+  const resendVerificationEmail: ErpContextValue['resendVerificationEmail'] = useCallback(
+    async () => {
+      const user = auth.currentUser;
+      if (!user) {
+        return {
+          ok: false,
+          error: 'Please enter your Email & Password and tap Sign In first to resend verification.',
+        };
+      }
+      try {
+        await sendEmailVerification(user);
+        pushToast({
+          type: 'success',
+          title: 'Verification Email Resent',
+          description: `Sent a fresh link to ${user.email}.`,
+        });
+        return {
+          ok: true,
+          info: `Fresh verification link sent to ${user.email}. Open it and then tap Sign In again.`,
+        };
+      } catch (err: unknown) {
+        return { ok: false, error: mapFirebaseAuthError(err) };
+      }
+    },
+    [pushToast]
   );
 
   const logout = useCallback(async () => {
@@ -952,7 +1126,8 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     async (updates: Partial<MasterAdminConfig>) => {
       const user = auth.currentUser;
       if (!user) return false;
-      const nextBrand = sanitizeStr(updates.brandName ?? masterConfig.brandName, 120) || 'AuraERP Cloud Suite';
+      const nextBrand =
+        sanitizeStr(updates.brandName ?? masterConfig.brandName, 120) || 'AuraERP Cloud Suite';
       const nextSupport = sanitizeStr(
         (updates.supportEmail ?? updates.email ?? masterConfig.supportEmail).toLowerCase(),
         160
@@ -1065,6 +1240,14 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         await batch.commit();
 
+        // Optionally provision Email/Password login via isolated secondary Firebase Auth app
+        // Plaintext password is NEVER saved to Firestore.
+        let authNote = 'Isolated Cloud Firestore workspace and portal links are live.';
+        if (input.adminPass && input.adminPass.trim().length >= 6) {
+          const authRes = await provisionEmailPasswordAccount(adminEmail, input.adminPass.trim());
+          if (authRes.message) authNote = authRes.message;
+        }
+
         const created: CompanyProfile = {
           id,
           name: nameClean,
@@ -1075,6 +1258,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           upi: input.upi || '',
           badge: input.badge || '',
           adminEmail,
+          adminPass: input.adminPass?.trim() || undefined,
           active: Boolean(input.active),
           createdAt: nowIso,
         };
@@ -1082,7 +1266,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         pushToast({
           type: 'success',
           title: `Company Provisioned: ${created.name}`,
-          description: 'Isolated Cloud Firestore workspace and portal links are live.',
+          description: authNote,
         });
         return created;
       } catch (err) {
@@ -1142,7 +1326,6 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           }
 
-          // Sync denormalized membership metadata
           const memSnap = await getDocs(
             query(collection(db, 'memberships'), where('companyId', '==', companyId))
           );
@@ -1217,7 +1400,6 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteCompany = useCallback(
     async (companyId: string) => {
       try {
-        // Delete all subcollections + members + memberships before deleting company root doc
         const subNames = ['members', ...SUBCOLLECTIONS];
         for (const sub of subNames) {
           const snap = await getDocs(collection(db, 'companies', companyId, sub));
@@ -1375,7 +1557,6 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const path = `companies/${activeCompanyId}/attendance/${id}`;
       try {
         if (session?.role === 'staff') {
-          // Tier 2B Staff allowlist: cannot alter wageEarned, rateMode, or status
           const staffPatch = stripUndefined({
             studioName:
               updates.studioName !== undefined ? sanitizeStr(updates.studioName, 160) : undefined,
@@ -1958,7 +2139,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         pushToast({
           type: 'error',
           title: 'Email Already Assigned',
-          description: 'A staff member with this Google email already exists in this company.',
+          description: 'A staff member with this email already exists in this company.',
         });
         return null;
       }
@@ -2023,6 +2204,16 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         await batch.commit();
 
+        // Optionally provision Email/Password login via isolated secondary Firebase Auth app
+        let authNote = `${staffInput.name} (${staffEmail}) can sign in with Google or Email & Password.`;
+        if (staffInput.password && staffInput.password.trim().length >= 6) {
+          const authRes = await provisionEmailPasswordAccount(
+            staffEmail,
+            staffInput.password.trim()
+          );
+          if (authRes.message) authNote = authRes.message;
+        }
+
         const created: StaffAccount = {
           ...staffInput,
           id,
@@ -2032,7 +2223,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         pushToast({
           type: 'success',
           title: 'Staff Account Created',
-          description: `${created.name} (${created.email}) can now sign in with Google.`,
+          description: authNote,
         });
         return created;
       } catch (err) {
@@ -2421,6 +2612,10 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       openLightbox: setLightboxUrl,
       closeLightbox: () => setLightboxUrl(null),
       signInWithGoogle,
+      signInWithEmail,
+      registerWithEmail,
+      sendPasswordReset,
+      resendVerificationEmail,
       logout,
       updateMasterConfig,
       createCompany,
@@ -2474,6 +2669,10 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       pushToast,
       dismissToast,
       signInWithGoogle,
+      signInWithEmail,
+      registerWithEmail,
+      sendPasswordReset,
+      resendVerificationEmail,
       logout,
       updateMasterConfig,
       createCompany,

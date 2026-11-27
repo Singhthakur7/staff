@@ -1,5 +1,15 @@
 import React, { useState } from 'react';
-import { Building2, Globe, ShieldCheck } from 'lucide-react';
+import {
+  ArrowRight,
+  Building2,
+  Eye,
+  EyeOff,
+  Globe,
+  Lock,
+  Mail,
+  RefreshCw,
+  ShieldCheck,
+} from 'lucide-react';
 import { useErp } from '../context/ErpContext';
 import { t } from '../i18n';
 import { BrandMark } from './BrandMark';
@@ -33,9 +43,24 @@ const GoogleIcon: React.FC = () => (
 export const CompanyAdminLoginScreen: React.FC<CompanyAdminLoginScreenProps> = ({
   companySlug,
 }) => {
-  const { lang, toggleLang, signInWithGoogle, isFirebaseConfigured } = useErp();
+  const {
+    lang,
+    toggleLang,
+    signInWithGoogle,
+    signInWithEmail,
+    registerWithEmail,
+    sendPasswordReset,
+    resendVerificationEmail,
+    isFirebaseConfigured,
+  } = useErp();
 
+  const [mode, setMode] = useState<'signin' | 'register'>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+  const [needsVerification, setNeedsVerification] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const formattedSlugTitle = companySlug
@@ -45,8 +70,58 @@ export const CompanyAdminLoginScreen: React.FC<CompanyAdminLoginScreenProps> = (
         .join(' ')
     : null;
 
+  const handleEmailSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setInfo('');
+    setNeedsVerification(false);
+    setSubmitting(true);
+
+    if (mode === 'register') {
+      const res = await registerWithEmail(email, password);
+      setSubmitting(false);
+      if (res.ok && res.info) {
+        setInfo(res.info);
+        setNeedsVerification(Boolean(res.needsVerification));
+        setMode('signin');
+      } else if (res.error) {
+        setError(res.error);
+      }
+      return;
+    }
+
+    const res = await signInWithEmail('company_admin', email, password, companySlug);
+    setSubmitting(false);
+    if (!res.ok) {
+      if (res.error) setError(res.error);
+      if (res.needsVerification) setNeedsVerification(true);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setError('');
+    setInfo('');
+    setSubmitting(true);
+    const res = await sendPasswordReset(email);
+    setSubmitting(false);
+    if (res.ok && res.info) setInfo(res.info);
+    else if (res.error) setError(res.error);
+  };
+
+  const handleResendVerification = async () => {
+    setError('');
+    setInfo('');
+    setSubmitting(true);
+    const res = await resendVerificationEmail();
+    setSubmitting(false);
+    if (res.ok && res.info) setInfo(res.info);
+    else if (res.error) setError(res.error);
+  };
+
   const handleGoogleSignIn = async () => {
     setError('');
+    setInfo('');
+    setNeedsVerification(false);
     setSubmitting(true);
     const res = await signInWithGoogle('company_admin', companySlug);
     setSubmitting(false);
@@ -66,9 +141,7 @@ export const CompanyAdminLoginScreen: React.FC<CompanyAdminLoginScreenProps> = (
               <h1 className="text-base font-extrabold tracking-tight text-white truncate">
                 {formattedSlugTitle || t(lang, 'adminPortal')}
               </h1>
-              <p className="text-xs text-[#FBBF24] truncate">
-                {t(lang, 'adminPortal')}
-              </p>
+              <p className="text-xs text-[#FBBF24] truncate">{t(lang, 'adminPortal')}</p>
             </div>
           </div>
 
@@ -111,7 +184,7 @@ export const CompanyAdminLoginScreen: React.FC<CompanyAdminLoginScreenProps> = (
         <div className="w-full max-w-md space-y-5">
           <FirebaseSetupBanner />
 
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-xs space-y-6">
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-xs space-y-5">
             <div>
               <div className="flex items-center justify-between gap-2 mb-2">
                 <span className="text-xs font-semibold text-[#D97706] inline-flex items-center gap-1.5">
@@ -121,32 +194,152 @@ export const CompanyAdminLoginScreen: React.FC<CompanyAdminLoginScreenProps> = (
                 <RtdbStatusBadge />
               </div>
               <h2 className="text-xl font-bold text-[#0B1120]">
-                {t(lang, 'companyAdminLoginTitle')}
+                {mode === 'signin'
+                  ? t(lang, 'companyAdminLoginTitle')
+                  : 'Set Up Company Admin Password'}
               </h2>
               <p className="text-sm text-slate-600 mt-1">
-                Sign in with the Google account assigned as Administrator for your company.
+                {mode === 'signin'
+                  ? 'Sign in with your assigned Company Admin Email & Password or Google account.'
+                  : 'Create a password for your assigned Company Admin email address.'}
               </p>
             </div>
 
             {error && (
-              <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-[#DC2626] leading-relaxed">
-                {error}
+              <div className="px-4 py-3 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-[#DC2626] leading-relaxed space-y-2">
+                <p>{error}</p>
+                {needsVerification && (
+                  <button
+                    type="button"
+                    onClick={handleResendVerification}
+                    disabled={submitting}
+                    className="inline-flex items-center gap-1.5 text-[#2563EB] hover:underline font-bold"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Resend Verification Email
+                  </button>
+                )}
               </div>
             )}
+
+            {info && (
+              <div className="px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs font-semibold text-[#047857] leading-relaxed">
+                {info}
+              </div>
+            )}
+
+            <form onSubmit={handleEmailSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Company Admin Email
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="email"
+                    required
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="admin@company.in"
+                    className="w-full h-12 pl-10 pr-3.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB]/25 focus:border-[#2563EB]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    {t(lang, 'passwordLabel')}
+                  </label>
+                  {mode === 'signin' && (
+                    <button
+                      type="button"
+                      onClick={handleForgotPassword}
+                      className="text-xs font-semibold text-[#2563EB] hover:underline"
+                    >
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder={
+                      mode === 'signin' ? 'Enter admin password' : 'Create password (min 6 chars)'
+                    }
+                    className="w-full h-12 pl-10 pr-11 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#2563EB]/25 focus:border-[#2563EB]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((p) => !p)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting || !isFirebaseConfigured}
+                className="w-full h-12 rounded-xl bg-[#0B1120] hover:bg-slate-800 disabled:opacity-50 text-white text-sm font-bold flex items-center justify-center gap-2 transition-colors"
+              >
+                <span>
+                  {submitting
+                    ? mode === 'signin'
+                      ? 'Verifying...'
+                      : 'Creating account...'
+                    : mode === 'signin'
+                    ? t(lang, 'signIn')
+                    : 'Create Password & Send Verification'}
+                </span>
+                <ArrowRight className="w-4 h-4 text-[#FBBF24]" />
+              </button>
+            </form>
+
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode((m) => (m === 'signin' ? 'register' : 'signin'));
+                  setError('');
+                  setInfo('');
+                }}
+                className="text-xs font-semibold text-slate-600 hover:text-[#2563EB]"
+              >
+                {mode === 'signin'
+                  ? 'First time using Email/Password? Set up password'
+                  : 'Already have a password? Back to Sign In'}
+              </button>
+            </div>
+
+            <div className="relative flex items-center py-1">
+              <div className="flex-1 border-t border-slate-200" />
+              <span className="px-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Or
+              </span>
+              <div className="flex-1 border-t border-slate-200" />
+            </div>
 
             <button
               type="button"
               onClick={handleGoogleSignIn}
               disabled={submitting || !isFirebaseConfigured}
-              className="w-full h-12 px-4 rounded-xl bg-[#0B1120] hover:bg-slate-800 disabled:opacity-50 text-white text-sm font-bold flex items-center justify-center gap-3 transition-colors"
+              className="w-full h-12 px-4 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-50 text-[#0B1120] text-sm font-bold flex items-center justify-center gap-3 transition-colors"
             >
               <GoogleIcon />
-              <span>
-                {submitting ? 'Verifying Company Access...' : 'Sign in with Google'}
-              </span>
+              <span>Continue with Google</span>
             </button>
 
-            <div className="pt-4 border-t border-slate-100 flex items-start gap-2.5 text-xs text-slate-500 leading-relaxed">
+            <div className="pt-3 border-t border-slate-100 flex items-start gap-2.5 text-xs text-slate-500 leading-relaxed">
               <ShieldCheck className="w-4 h-4 text-[#D97706] shrink-0 mt-0.5" />
               <span>
                 Your workspace is strictly isolated in Cloud Firestore. Suspended company accounts

@@ -1,5 +1,11 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import {
+  createUserWithEmailAndPassword,
+  getAuth,
+  GoogleAuthProvider,
+  sendEmailVerification,
+  signOut,
+} from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer, Timestamp } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -19,6 +25,68 @@ export const db = firebaseConfig.firestoreDatabaseId
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+/**
+ * Provision a Firebase Email/Password account using an isolated secondary App instance
+ * so the currently signed-in Master Admin or Company Admin session is never interrupted.
+ * Plaintext passwords are NEVER stored in Firestore.
+ */
+export async function provisionEmailPasswordAccount(
+  email: string,
+  password: string
+): Promise<{
+  ok: boolean;
+  status: 'created' | 'exists' | 'provider_disabled' | 'error';
+  message?: string;
+}> {
+  const cleanEmail = email.trim().toLowerCase();
+  if (!cleanEmail || password.trim().length < 6) {
+    return { ok: false, status: 'error', message: 'Password must be at least 6 characters.' };
+  }
+
+  try {
+    const secondaryName = 'secondary-provisioning-auth';
+    const secondaryApp =
+      getApps().find((a) => a.name === secondaryName) ||
+      initializeApp(firebaseConfig, secondaryName);
+    const secondaryAuth = getAuth(secondaryApp);
+
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, cleanEmail, password.trim());
+    try {
+      await sendEmailVerification(cred.user);
+    } catch {
+      // Verification email can also be resent from the login screen
+    }
+    await signOut(secondaryAuth);
+    return {
+      ok: true,
+      status: 'created',
+      message: `Email/Password login created for ${cleanEmail} and verification link sent.`,
+    };
+  } catch (err: unknown) {
+    const code = (err as { code?: string })?.code || '';
+    if (code === 'auth/email-already-in-use') {
+      return {
+        ok: true,
+        status: 'exists',
+        message: `Auth account for ${cleanEmail} already exists — they can sign in immediately.`,
+      };
+    }
+    if (code === 'auth/operation-not-allowed') {
+      return {
+        ok: false,
+        status: 'provider_disabled',
+        message:
+          'Enable Email/Password sign-in in Firebase Console (Authentication → Sign-in method) to activate password logins.',
+      };
+    }
+    return {
+      ok: false,
+      status: 'error',
+      message: err instanceof Error ? err.message : 'Failed to create Email/Password auth account.',
+    };
+  }
+}
 
 export enum OperationType {
   CREATE = 'create',
@@ -110,7 +178,12 @@ export function stripUndefined<T extends Record<string, unknown>>(obj: T): Recor
 
 export function toIsoString(val: unknown): string {
   if (typeof val === 'string') return val;
-  if (val && typeof val === 'object' && 'toDate' in val && typeof (val as Timestamp).toDate === 'function') {
+  if (
+    val &&
+    typeof val === 'object' &&
+    'toDate' in val &&
+    typeof (val as Timestamp).toDate === 'function'
+  ) {
     return (val as Timestamp).toDate().toISOString();
   }
   return '';
@@ -126,7 +199,6 @@ export async function testConnection(): Promise<boolean> {
       console.error('Please check your Firebase configuration. Firestore client is offline.');
       return false;
     }
-    // Permission denied or not-found still proves live reachability to Firestore backend
     return true;
   }
 }

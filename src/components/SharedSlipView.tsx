@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, FileText, Loader2, Lock } from 'lucide-react';
+import { ArrowLeft, FileText, Loader2, Lock, Mail } from 'lucide-react';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
-import { signInWithPopup } from 'firebase/auth';
+import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
 import {
   AttendanceRecord,
   CompanyDatabase,
@@ -43,13 +43,15 @@ export const SharedSlipView: React.FC<SharedSlipViewProps> = ({
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState('');
   const [signingIn, setSigningIn] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [company, setCompany] = useState<CompanyProfile | null>(null);
   const [companyDb, setCompanyDb] = useState<CompanyDatabase>(EMPTY_COMPANY_DB);
 
   useEffect(() => {
     let active = true;
     const loadSlip = async () => {
-      if (!isFirebaseConfigured || !firebaseUser) {
+      if (!isFirebaseConfigured || !firebaseUser || !firebaseUser.emailVerified) {
         setLoading(false);
         return;
       }
@@ -125,7 +127,7 @@ export const SharedSlipView: React.FC<SharedSlipViewProps> = ({
         if (!active) return;
         setAuthError(
           err instanceof Error
-            ? 'You do not have permission to view this private salary slip. Sign in with the employee or Company Admin Google account.'
+            ? 'You do not have permission to view this private salary slip. Sign in with the employee or Company Admin account.'
             : 'Unable to load salary slip.'
         );
         setLoading(false);
@@ -137,7 +139,24 @@ export const SharedSlipView: React.FC<SharedSlipViewProps> = ({
     };
   }, [companyId, staffId, firebaseUser]);
 
-  const handleSignInToView = async () => {
+  const handleEmailSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSigningIn(true);
+    setAuthError('');
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email.trim().toLowerCase(), password);
+      await cred.user.reload();
+      if (!cred.user.emailVerified) {
+        setAuthError('Please verify your email link in your inbox before opening this slip.');
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Email sign-in failed.');
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
     setSigningIn(true);
     setAuthError('');
     try {
@@ -166,35 +185,74 @@ export const SharedSlipView: React.FC<SharedSlipViewProps> = ({
     );
   }
 
-  if (!firebaseUser) {
+  if (!firebaseUser || !firebaseUser.emailVerified) {
     return (
       <div className="min-h-screen bg-[#F4F7FB] flex items-center justify-center p-6">
-        <div className="bg-white border border-slate-200 rounded-2xl p-8 max-w-md w-full text-center space-y-4">
-          <div className="w-12 h-12 rounded-2xl bg-blue-50 text-[#2563EB] flex items-center justify-center mx-auto">
-            <Lock className="w-6 h-6" />
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 max-w-md w-full space-y-4">
+          <div className="text-center space-y-2">
+            <div className="w-12 h-12 rounded-2xl bg-blue-50 text-[#2563EB] flex items-center justify-center mx-auto">
+              <Lock className="w-6 h-6" />
+            </div>
+            <h2 className="text-lg font-bold text-[#0B1120]">
+              Verify Identity to View Salary Slip
+            </h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Sign in with your Email &amp; Password or Google account to unlock this private
+              corporate salary slip.
+            </p>
           </div>
-          <h2 className="text-lg font-bold text-[#0B1120]">Verify Identity to View Salary Slip</h2>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            For payroll privacy, corporate salary slips are protected by Cloud Firestore access
-            control. Sign in with your verified Google account to open this document.
-          </p>
+
           {authError && (
             <div className="px-3.5 py-2.5 rounded-xl bg-red-50 border border-red-200 text-xs font-semibold text-[#DC2626]">
               {authError}
             </div>
           )}
+
+          <form onSubmit={handleEmailSignIn} className="space-y-3">
+            <div className="relative">
+              <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email address"
+                className="w-full h-11 pl-10 pr-3 rounded-xl border border-slate-300 text-sm"
+              />
+            </div>
+            <div className="relative">
+              <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password"
+                className="w-full h-11 pl-10 pr-3 rounded-xl border border-slate-300 text-sm"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={signingIn}
+              className="w-full min-h-[44px] px-5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-white text-sm font-bold"
+            >
+              {signingIn ? 'Signing in...' : 'Sign in with Email & Password'}
+            </button>
+          </form>
+
           <button
             type="button"
             disabled={signingIn}
-            onClick={handleSignInToView}
-            className="w-full min-h-[46px] px-5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-white text-sm font-bold"
+            onClick={handleGoogleSignIn}
+            className="w-full min-h-[44px] px-5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-[#0B1120] text-sm font-bold"
           >
-            {signingIn ? 'Signing in...' : 'Sign in with Google'}
+            Continue with Google
           </button>
+
           <button
             type="button"
             onClick={onExit}
-            className="w-full min-h-[42px] px-5 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold"
+            className="w-full min-h-[40px] px-5 rounded-xl text-slate-600 hover:bg-slate-50 text-xs font-semibold"
           >
             Return to Portal
           </button>
