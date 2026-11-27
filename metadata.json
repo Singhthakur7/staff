@@ -1,0 +1,6 @@
+{
+  "name": "Malanadu Media Solutions & Live On Connect — Corporate Broadcast ERP & Payroll Suite",
+  "description": "Corporate Broadcast ERP, Live Crew Attendance, Multi-Month PDF Payroll & Google Pay Confirmation Suite for Malanadu Media Solutions & Live On Connect (Manimala & Kanjirappally, Kottayam).",
+  "requestFramePermissions": ["camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,198 @@
+/**
+ * Phase 0 Security Rules TDD Test Suite (Dirty Dozen Adversarial Payloads)
+ * Designed for @firebase/rules-unit-testing against firestore.rules.
+ */
+
+export interface DirtyDozenCase {
+  id: number;
+  name: string;
+  operation: 'get' | 'list' | 'create' | 'update' | 'delete';
+  path: string;
+  auth: { uid: string; email: string; email_verified: boolean } | null;
+  payload?: Record<string, unknown>;
+  expected: 'PERMISSION_DENIED';
+}
+
+export const DIRTY_DOZEN_TESTS: DirtyDozenCase[] = [
+  {
+    id: 1,
+    name: 'Email Spoofing (Unverified Master Admin)',
+    operation: 'get',
+    path: '/companies/comp_alpha',
+    auth: { uid: 'uid_spoof', email: 'shriyanshsingh7581@gmail.com', email_verified: false },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 2,
+    name: 'Shadow Field Injection on Company Create',
+    operation: 'create',
+    path: '/companies/comp_shadow',
+    auth: { uid: 'uid_master', email: 'shriyanshsingh7581@gmail.com', email_verified: true },
+    payload: {
+      id: 'comp_shadow',
+      name: 'Shadow Corp',
+      slug: 'shadow-corp',
+      adminEmail: 'admin@shadow.in',
+      active: true,
+      isSuperVerified: true,
+      createdByUid: 'uid_master',
+    },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 3,
+    name: 'Cross-Tenant Ledger Read',
+    operation: 'get',
+    path: '/companies/comp_beta/ledger/ldg_1',
+    auth: { uid: 'uid_admin_a', email: 'admin@alpha.in', email_verified: true },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 4,
+    name: 'Privilege Escalation into /admins',
+    operation: 'create',
+    path: '/admins/uid_admin_a',
+    auth: { uid: 'uid_admin_a', email: 'admin@alpha.in', email_verified: true },
+    payload: {
+      email: 'admin@alpha.in',
+      displayName: 'Attacker',
+      role: 'master_admin',
+    },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 5,
+    name: 'Staff Wage Tampering on Attendance Update',
+    operation: 'update',
+    path: '/companies/comp_alpha/attendance/att_1',
+    auth: { uid: 'uid_staff_1', email: 'staff1@alpha.in', email_verified: true },
+    payload: {
+      venue: 'Updated Venue',
+      wageEarned: 999999,
+    },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 6,
+    name: 'Staff Self-Approving Expense Claim on Create',
+    operation: 'create',
+    path: '/companies/comp_alpha/expenses/exp_fraud',
+    auth: { uid: 'uid_staff_1', email: 'staff1@alpha.in', email_verified: true },
+    payload: {
+      id: 'exp_fraud',
+      companyId: 'comp_alpha',
+      companyAdminEmail: 'admin@alpha.in',
+      staffId: 'stf_1',
+      staffEmail: 'staff1@alpha.in',
+      staffName: 'Staff One',
+      date: '2026-11-26',
+      title: 'Fake Claim',
+      amount: 50000,
+      status: 'approved',
+      createdByUid: 'uid_staff_1',
+    },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 7,
+    name: 'Terminal State Bypass on Confirmed Salary Payment',
+    operation: 'update',
+    path: '/companies/comp_alpha/payments/pay_confirmed',
+    auth: { uid: 'uid_staff_1', email: 'staff1@alpha.in', email_verified: true },
+    payload: {
+      confirmationStatus: 'pending',
+    },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 8,
+    name: 'ID Poisoning on Ledger Create',
+    operation: 'create',
+    path: '/companies/comp_alpha/ledger/bad..$id!@#',
+    auth: { uid: 'uid_admin_a', email: 'admin@alpha.in', email_verified: true },
+    payload: {
+      id: 'bad..$id!@#',
+      companyId: 'comp_alpha',
+      companyAdminEmail: 'admin@alpha.in',
+      type: 'income',
+      title: 'Poison',
+      category: 'Other',
+      amount: 100,
+      date: '2026-11-26',
+      createdByUid: 'uid_admin_a',
+    },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 9,
+    name: 'Client Timestamp Forgery on Leave Create',
+    operation: 'create',
+    path: '/companies/comp_alpha/leaves/lv_forged',
+    auth: { uid: 'uid_staff_1', email: 'staff1@alpha.in', email_verified: true },
+    payload: {
+      id: 'lv_forged',
+      companyId: 'comp_alpha',
+      companyAdminEmail: 'admin@alpha.in',
+      staffId: 'stf_1',
+      staffEmail: 'staff1@alpha.in',
+      staffName: 'Staff One',
+      leaveType: 'Casual',
+      date: '2026-11-28',
+      reason: 'Personal',
+      status: 'pending',
+      createdByUid: 'uid_staff_1',
+      createdAt: '2020-01-01T00:00:00Z',
+    },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 10,
+    name: 'Suspended Company Write Blocked by Master Gate',
+    operation: 'create',
+    path: '/companies/comp_suspended/attendance/att_2',
+    auth: { uid: 'uid_staff_s', email: 'staff@suspended.in', email_verified: true },
+    payload: {
+      id: 'att_2',
+      companyId: 'comp_suspended',
+      companyAdminEmail: 'admin@suspended.in',
+      staffId: 'stf_s',
+      staffEmail: 'staff@suspended.in',
+      staffName: 'Suspended Staff',
+      date: '2026-11-26',
+      punchInTime: '2026-11-26T08:00:00Z',
+      status: 'working',
+      rateMode: 'regular',
+      wageEarned: 1500,
+      createdByUid: 'uid_staff_s',
+    },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 11,
+    name: 'Unfiltered PII Scraping on Staff Collection',
+    operation: 'list',
+    path: '/companies/comp_alpha/staff',
+    auth: { uid: 'uid_staff_1', email: 'staff1@alpha.in', email_verified: true },
+    expected: 'PERMISSION_DENIED',
+  },
+  {
+    id: 12,
+    name: 'Value Poisoning on Customer allowedStaffEmails Array',
+    operation: 'create',
+    path: '/companies/comp_alpha/customers/cust_poison',
+    auth: { uid: 'uid_admin_a', email: 'admin@alpha.in', email_verified: true },
+    payload: {
+      id: 'cust_poison',
+      companyId: 'comp_alpha',
+      companyAdminEmail: 'admin@alpha.in',
+      allowedStaffEmails: [12345],
+      name: 'Client',
+      studioName: 'Studio',
+      income: 1000,
+      expense: 100,
+      received: 500,
+      createdByUid: 'uid_admin_a',
+    },
+    expected: 'PERMISSION_DENIED',
+  },
+];
