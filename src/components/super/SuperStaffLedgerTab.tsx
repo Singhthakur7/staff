@@ -1,9 +1,11 @@
 import React from 'react';
-import { Users } from 'lucide-react';
+import { Camera, Users } from 'lucide-react';
+import { useStaffOnline } from '../../context/StaffOnlineContext';
 import { CompanyDatabase, CompanyRecord } from '../../types';
 import {
   calculateStaffSummary,
   formatDateIN,
+  formatDateTimeIN,
   formatINR,
   formatTimeIN,
 } from '../../utils/helpers';
@@ -14,6 +16,8 @@ interface SuperStaffLedgerTabProps {
 }
 
 export const SuperStaffLedgerTab: React.FC<SuperStaffLedgerTabProps> = ({ company, db }) => {
+  const { openLightbox } = useStaffOnline();
+
   if (!company) {
     return (
       <div className="bg-white border border-slate-200/80 rounded-2xl p-10 text-center text-sm text-slate-500">
@@ -47,26 +51,60 @@ export const SuperStaffLedgerTab: React.FC<SuperStaffLedgerTabProps> = ({ compan
         <div className="space-y-4">
           {db.staff.map((st) => {
             const sum = calculateStaffSummary(st, db);
+            const latestSelfie = db.punchLogs.find((p) => p.staffId === st.id && p.selfieUrl);
             return (
               <div
                 key={st.id}
                 className="bg-white border border-slate-200/80 rounded-2xl p-5 card-elevated space-y-4"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3.5">
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-base font-bold text-[#0F172A]">{st.name}</h3>
-                      <span className="text-xs text-slate-500">· {st.role}</span>
-                      <span
-                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${sum.dueBadge.className}`}
+                  <div className="flex items-start gap-3.5 min-w-0">
+                    {latestSelfie ? (
+                      <button
+                        type="button"
+                        onClick={() => openLightbox(latestSelfie.selfieUrl)}
+                        title={`Last verified: ${formatDateTimeIN(latestSelfie.punchInTime || latestSelfie.createdAt)}`}
+                        className="w-14 h-14 rounded-xl overflow-hidden border border-slate-200 bg-slate-900 shrink-0 relative group"
                       >
-                        {sum.dueBadge.label}
-                      </span>
+                        <img
+                          src={latestSelfie.selfieUrl}
+                          alt={`${st.name} verified selfie`}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                        />
+                        <span className="absolute bottom-0 inset-x-0 bg-emerald-700/85 text-[9px] font-bold text-white text-center py-0.5">
+                          Selfie ✓
+                        </span>
+                      </button>
+                    ) : (
+                      <div className="w-14 h-14 rounded-xl border border-dashed border-slate-200 bg-slate-50 flex flex-col items-center justify-center text-slate-400 shrink-0">
+                        <Camera className="w-4 h-4" />
+                        <span className="text-[9px] font-medium mt-0.5">No Selfie</span>
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-base font-bold text-[#0F172A]">{st.name}</h3>
+                        <span className="text-xs text-slate-500">· {st.role}</span>
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${sum.dueBadge.className}`}
+                        >
+                          {sum.dueBadge.label}
+                        </span>
+                      </div>
+                      <p className="text-xs font-mono text-slate-500 mt-1">
+                        Ph: {st.phone || '—'} · GPay UPI: {st.upiId || '—'} · Period:{' '}
+                        {formatDateIN(st.periodFrom)} → {formatDateIN(st.periodTo)}
+                      </p>
+                      {latestSelfie && (
+                        <p className="text-[11px] text-emerald-700 font-medium mt-0.5">
+                          Last Selfie Verified:{' '}
+                          <span className="font-mono">
+                            {formatDateTimeIN(latestSelfie.punchInTime || latestSelfie.createdAt)}
+                          </span>
+                        </p>
+                      )}
                     </div>
-                    <p className="text-xs font-mono text-slate-500 mt-1">
-                      Ph: {st.phone || '—'} · GPay UPI: {st.upiId || '—'} · Period:{' '}
-                      {formatDateIN(st.periodFrom)} → {formatDateIN(st.periodTo)}
-                    </p>
                   </div>
                   <div className="text-right">
                     <p className="text-[11px] text-slate-500">Balance Payable</p>

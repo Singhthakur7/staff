@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Building2,
+  Camera,
   Eye,
   KeyRound,
   ReceiptIndianRupee,
@@ -14,6 +15,7 @@ import { ShellFrame, ShellNavItem } from '../ShellFrame';
 import { SuperCompaniesTab } from './SuperCompaniesTab';
 import { SuperCustomersTab } from './SuperCustomersTab';
 import { SuperPasswordsTab } from './SuperPasswordsTab';
+import { SuperSelfieLogsTab } from './SuperSelfieLogsTab';
 import { SuperStaffLedgerTab } from './SuperStaffLedgerTab';
 
 export const SuperAdminPortal: React.FC = () => {
@@ -40,12 +42,24 @@ export const SuperAdminPortal: React.FC = () => {
     ? companyDataMap[selectedCompany.id] || EMPTY_COMPANY_DB
     : EMPTY_COMPANY_DB;
 
+  const totalSelfiesCount = companies.reduce(
+    (sum, c) => sum + (companyDataMap[c.id]?.punchLogs.length || 0),
+    0
+  );
+
   const navItems: ShellNavItem[] = [
     {
       id: 'companies',
       label: t(lang, 'superCompanies'),
       shortLabel: 'Companies',
       icon: Building2,
+    },
+    {
+      id: 'selfie_logs',
+      label: t(lang, 'superSelfieLogs'),
+      shortLabel: 'Selfies',
+      icon: Camera,
+      badgeCount: totalSelfiesCount,
     },
     {
       id: 'staff_ledger',
@@ -139,6 +153,9 @@ export const SuperAdminPortal: React.FC = () => {
             selectedCompany={selectedCompany}
             onSelectCompanyId={setSelectedCompanyId}
           />
+        )}
+        {activeTab === 'selfie_logs' && (
+          <SuperSelfieLogsTab selectedCompany={selectedCompany} />
         )}
         {activeTab === 'staff_ledger' && (
           <SuperStaffLedgerTab company={selectedCompany} db={selectedDb} />

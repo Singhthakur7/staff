@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Clock,
   Copy,
   Dices,
   Eye,
@@ -14,6 +15,7 @@ import {
   MapPin,
   Megaphone,
   MessageCircle,
+  PlayCircle,
   RefreshCw,
   Rocket,
   ShieldCheck,
@@ -27,8 +29,11 @@ import { CompanyRecord } from '../types';
 import {
   buildWhatsAppUrl,
   captureMirroredVideoFrame,
+  formatINR,
   formatTimeIN,
+  formatTimeWithSecondsIN,
   generatePassword,
+  getDutyStageInfo,
   safeCopyText,
 } from '../utils/helpers';
 import { getSafeOrigin } from '../utils/router';
@@ -63,6 +68,7 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
     companyDataMap,
     registerCompany,
     loginStaffWithSelfie,
+    punchOutStaffWithSelfie,
     pushToast,
   } = useStaffOnline();
 
@@ -99,8 +105,17 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
   const [staffIdentifier, setStaffIdentifier] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
   const [showStaffPass, setShowStaffPass] = useState(false);
+  const [selfieActionMode, setSelfieActionMode] = useState<'punch_in' | 'punch_out'>('punch_in');
+  const [punchOutReceipt, setPunchOutReceipt] = useState<{
+    staffName: string;
+    workTitle: string;
+    durationText: string;
+    dutyWage: number;
+    punchOutTime: string;
+  } | null>(null);
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
+  const [liveNowIso, setLiveNowIso] = useState<string>(() => new Date().toISOString());
 
   // Mandatory Front Camera Selfie & GPS State
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -112,6 +127,13 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
   const [gpsLat, setGpsLat] = useState<number | undefined>(undefined);
   const [gpsLng, setGpsLng] = useState<number | undefined>(undefined);
   const [gpsLabel, setGpsLabel] = useState<string>('Detecting GPS...');
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setLiveNowIso(new Date().toISOString());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (lockedCompany) {
@@ -132,6 +154,26 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
     const db = companyDataMap[activeCompanyForLogin.id];
     return (db?.staff || []).filter((s) => s.active);
   }, [activeCompanyForLogin, companyDataMap]);
+
+  const activeShiftForIdentifier = useMemo(() => {
+    if (!activeCompanyForLogin || !staffIdentifier.trim()) return null;
+    const db = companyDataMap[activeCompanyForLogin.id];
+    if (!db) return null;
+    const ident = staffIdentifier.trim().toLowerCase();
+    const digits = ident.replace(/[^0-9]/g, '');
+    const matched = db.staff.find((s) => {
+      const emailMatch = s.email.trim().toLowerCase() === ident;
+      const phoneDigits = s.phone.replace(/[^0-9]/g, '');
+      const phoneMatch = Boolean(digits) && (phoneDigits === digits || phoneDigits.endsWith(digits));
+      return emailMatch || phoneMatch || s.id === staffIdentifier;
+    });
+    if (!matched) return null;
+    return (
+      db.punchLogs.find(
+        (p) => p.staffId === matched.id && p.type === 'duty_punch' && p.status === 'active'
+      ) || null
+    );
+  }, [activeCompanyForLogin, companyDataMap, staffIdentifier]);
 
   // Capture GPS silently on mount
   const refreshGps = () => {
@@ -254,6 +296,7 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
   const handleStaffLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
+    setPunchOutReceipt(null);
     if (!activeCompanyForLogin) {
       setLoginError('Please select a registered company first.');
       return;
@@ -263,10 +306,36 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
       return;
     }
     if (!capturedSelfie) {
-      setLoginError('Mandatory Live Front-Camera Selfie is required before signing in.');
+      setLoginError('Mandatory Live Front-Camera Selfie is required before proceeding.');
       return;
     }
     setLoggingIn(true);
+    if (selfieActionMode === 'punch_out') {
+      const res = await punchOutStaffWithSelfie({
+        companyId: activeCompanyForLogin.id,
+        identifier: staffIdentifier.trim(),
+        password: staffPassword,
+        selfieUrl: capturedSelfie,
+        gpsLat,
+        gpsLng,
+        gpsLabel,
+      });
+      setLoggingIn(false);
+      if (!res.ok) {
+        setLoginError(res.error || 'Unable to complete Punch-Out.');
+        return;
+      }
+      setPunchOutReceipt({
+        staffName: res.staffName || 'Staff Member',
+        workTitle: res.workTitle || 'Duty Shift',
+        durationText: res.durationText || '00:00',
+        dutyWage: res.dutyWage || 0,
+        punchOutTime: res.punchOutTime || new Date().toISOString(),
+      });
+      setSelfieActionMode('punch_in');
+      return;
+    }
+
     const res = await loginStaffWithSelfie({
       companyId: activeCompanyForLogin.id,
       identifier: staffIdentifier.trim(),
@@ -536,6 +605,10 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#0B1120] text-white font-mono text-[11px] font-bold">
+                <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{formatTimeWithSecondsIN(liveNowIso)}</span>
+              </span>
               <button
                 type="button"
                 onClick={refreshGps}
@@ -757,6 +830,94 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
                 </div>
               </div>
 
+              {/* Active Shift Auto-Detected Banner */}
+              {activeShiftForIdentifier && (
+                <div className="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                  <div className="space-y-0.5">
+                    <p className="font-bold text-emerald-900 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      Active Duty Shift Open: {activeShiftForIdentifier.workTitle}
+                    </p>
+                    <p className="text-emerald-800 font-mono text-[11px]">
+                      Punched In: {formatTimeIN(activeShiftForIdentifier.punchInTime)} · Stage:{' '}
+                      {getDutyStageInfo(activeShiftForIdentifier).label}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelfieActionMode('punch_out')}
+                    className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold shrink-0"
+                  >
+                    Switch to Punch-Out
+                  </button>
+                </div>
+              )}
+
+              {/* Direct Live Selfie Punch-Out Confirmation Receipt */}
+              {punchOutReceipt && (
+                <div className="rounded-2xl bg-[#0B1120] text-white p-4 space-y-2.5 border border-emerald-500/40">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-emerald-400 inline-flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4" />
+                      Shift Punched-Out &amp; Verified
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-300">
+                      {formatTimeIN(punchOutReceipt.punchOutTime)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-200">
+                    <strong>{punchOutReceipt.staffName}</strong> completed{' '}
+                    <strong>{punchOutReceipt.workTitle}</strong> · Duration:{' '}
+                    <span className="font-mono font-bold text-emerald-300">
+                      {punchOutReceipt.durationText}
+                    </span>{' '}
+                    · Wage Credited:{' '}
+                    <span className="font-mono font-bold text-amber-300">
+                      {formatINR(punchOutReceipt.dutyWage)}
+                    </span>
+                  </p>
+                </div>
+              )}
+
+              {/* Prominent Action Mode Toggle: Punch-In & Login vs Punch-Out */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-600">
+                  Select Live Selfie Action *
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelfieActionMode('punch_in');
+                      setLoginError('');
+                    }}
+                    className={`min-h-[48px] px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                      selfieActionMode === 'punch_in'
+                        ? 'bg-[#2563EB] border-[#2563EB] text-white shadow-[0_6px_16px_-6px_rgba(37,99,235,0.6)]'
+                        : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <PlayCircle className="w-4 h-4 shrink-0" />
+                    <span>▶️ Punch-In &amp; Login</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelfieActionMode('punch_out');
+                      setLoginError('');
+                    }}
+                    className={`min-h-[48px] px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                      selfieActionMode === 'punch_out'
+                        ? 'bg-rose-600 border-rose-600 text-white shadow-[0_6px_16px_-6px_rgba(225,29,72,0.55)]'
+                        : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <StopCircle className="w-4 h-4 shrink-0" />
+                    <span>⏹️ Punch-Out</span>
+                  </button>
+                </div>
+              </div>
+
               {loginError && (
                 <div className="rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 text-xs font-medium text-rose-700">
                   {loginError}
@@ -766,17 +927,34 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
               <button
                 type="submit"
                 disabled={loggingIn || !capturedSelfie || !activeCompanyForLogin}
-                className="w-full min-h-[50px] px-5 rounded-2xl bg-[#2563EB] hover:bg-[#1E3A8A] disabled:opacity-50 text-white text-sm font-bold flex items-center justify-center gap-2 transition-colors shadow-[0_8px_20px_-6px_rgba(37,99,235,0.45)]"
+                className={`w-full min-h-[52px] px-5 rounded-2xl disabled:opacity-50 text-white text-sm font-bold flex items-center justify-center gap-2 transition-colors ${
+                  selfieActionMode === 'punch_out'
+                    ? 'bg-rose-600 hover:bg-rose-700 shadow-[0_8px_20px_-6px_rgba(225,29,72,0.45)]'
+                    : 'bg-[#2563EB] hover:bg-[#1E3A8A] shadow-[0_8px_20px_-6px_rgba(37,99,235,0.45)]'
+                }`}
               >
-                <UserCheck className="w-4 h-4" />
-                {loggingIn ? 'Verifying Selfie & Signing In...' : 'Verify Live Selfie & Sign In'}
+                {selfieActionMode === 'punch_out' ? (
+                  <>
+                    <StopCircle className="w-4 h-4" />
+                    {loggingIn
+                      ? 'Verifying Selfie & Punching Out...'
+                      : `Verify Selfie & Punch-Out (${formatTimeIN(liveNowIso)})`}
+                  </>
+                ) : (
+                  <>
+                    <UserCheck className="w-4 h-4" />
+                    {loggingIn
+                      ? 'Verifying Selfie & Signing In...'
+                      : `Punch-In & Enter Portal (${formatTimeIN(liveNowIso)})`}
+                  </>
+                )}
               </button>
 
               <p className="text-[11px] text-slate-500 flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 <span>
-                  Your captured selfie and GPS timestamp are logged automatically as your check-in
-                  verification.
+                  Live selfie, exact server-synced clock time, and GPS coordinates are stamped
+                  automatically — zero manual time editing.
                 </span>
               </p>
             </form>

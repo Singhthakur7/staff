@@ -82,6 +82,7 @@ export const StaffSalaryTab: React.FC<{ staff: StaffMember }> = ({ staff }) => {
                       <img
                         src={p.screenshotUrl}
                         alt="Payment proof"
+                        referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"
                       />
                     </button>

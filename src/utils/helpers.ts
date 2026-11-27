@@ -1,4 +1,11 @@
-import { CompanyDatabase, PasswordProfile, StaffMember } from '../types';
+import {
+  CompanyDatabase,
+  DutyStage,
+  GpsStamp,
+  PasswordProfile,
+  PunchLogRecord,
+  StaffMember,
+} from '../types';
 
 export function uid(prefix = 'id'): string {
   const rand = Math.random().toString(36).slice(2, 8);
@@ -84,9 +91,125 @@ export function formatTimeIN(isoOrHHMM?: string): string {
   }
 }
 
+export function formatTimeWithSecondsIN(iso?: string): string {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return formatTimeIN(iso);
+    return d.toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    });
+  } catch {
+    return formatTimeIN(iso);
+  }
+}
+
 export function formatDateTimeIN(iso?: string): string {
   if (!iso) return '—';
   return `${formatDateIN(iso)}, ${formatTimeIN(iso)}`;
+}
+
+export function formatShiftDuration(startIso?: string, endIso?: string): string {
+  if (!startIso || !endIso) return '—';
+  const startMs = new Date(startIso).getTime();
+  const endMs = new Date(endIso).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return '00:00';
+  const totalMins = Math.floor((endMs - startMs) / 60000);
+  const hrs = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+  return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
+export function formatElapsedTimer(startIso?: string, nowMs = Date.now()): string {
+  if (!startIso) return '00:00:00';
+  const startMs = new Date(startIso).getTime();
+  if (!Number.isFinite(startMs) || nowMs < startMs) return '00:00:00';
+  const totalSecs = Math.floor((nowMs - startMs) / 1000);
+  const hrs = Math.floor(totalSecs / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  const secs = totalSecs % 60;
+  return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+export interface DutyStageMeta {
+  stage: DutyStage;
+  label: string;
+  labelMl: string;
+  badgeClass: string;
+}
+
+export function getDutyStageInfo(log: PunchLogRecord): DutyStageMeta {
+  if (log.type === 'login_selfie') {
+    return {
+      stage: 'punched_out',
+      label: 'Selfie Verified',
+      labelMl: 'സെൽഫി വെരിഫൈഡ്',
+      badgeClass: 'bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20',
+    };
+  }
+  if (log.status === 'completed' || log.punchOutTime || log.dutyStage === 'punched_out') {
+    return {
+      stage: 'punched_out',
+      label: 'Punched Out',
+      labelMl: 'പഞ്ച്-ഔട്ട് ചെയ്തു',
+      badgeClass: 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-600/15',
+    };
+  }
+  if (log.workCompletedTime || log.dutyStage === 'work_completed') {
+    return {
+      stage: 'work_completed',
+      label: 'Work Completed',
+      labelMl: 'വർക്ക് പൂർത്തിയായി',
+      badgeClass: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20',
+    };
+  }
+  if (log.arriveTime || log.dutyStage === 'arrived') {
+    return {
+      stage: 'arrived',
+      label: 'On Site / Arrived',
+      labelMl: 'സൈറ്റിൽ എത്തി',
+      badgeClass: 'bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-600/20',
+    };
+  }
+  if (log.departTime || log.dutyStage === 'departed') {
+    return {
+      stage: 'departed',
+      label: 'On the Way / Departed',
+      labelMl: 'യാത്രയിലാണ്',
+      badgeClass: 'bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/25',
+    };
+  }
+  return {
+    stage: 'punched_in',
+    label: 'Punched In',
+    labelMl: 'പഞ്ച്-ഇൻ ചെയ്തു',
+    badgeClass: 'bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-600/20',
+  };
+}
+
+export function captureBrowserGps(timeoutMs = 4500): Promise<GpsStamp> {
+  return new Promise((resolve) => {
+    try {
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        resolve({ label: 'GPS unavailable' });
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = Number(pos.coords.latitude.toFixed(5));
+          const lng = Number(pos.coords.longitude.toFixed(5));
+          resolve({ lat, lng, label: `${lat}, ${lng}` });
+        },
+        () => resolve({ label: 'Location permission not granted' }),
+        { enableHighAccuracy: true, timeout: timeoutMs }
+      );
+    } catch {
+      resolve({ label: 'GPS unavailable' });
+    }
+  });
 }
 
 export function slugifyCompany(name: string): string {
@@ -300,7 +423,11 @@ export function calculateStaffSummary(
   };
 
   const dutyPunches = db.punchLogs.filter(
-    (p) => p.staffId === staff.id && p.type === 'duty_punch' && inMonthRange(p.date)
+    (p) =>
+      p.staffId === staff.id &&
+      p.type === 'duty_punch' &&
+      p.status === 'completed' &&
+      inMonthRange(p.date)
   );
   const expenses = db.expenses.filter(
     (e) => e.staffId === staff.id && inMonthRange(e.date)

@@ -32,6 +32,7 @@ import {
 } from '../../utils/helpers';
 import { downloadElementAsPdf, triggerDirectPrint } from '../../utils/pdfExport';
 import { buildSharedSlipUrl, getSafeOrigin } from '../../utils/router';
+import { uploadToCloudinary } from '../../utils/cloudinary';
 import { FormalSalarySlipSheet } from '../DocumentPreviews';
 
 export const AdminSalaryTab: React.FC = () => {
@@ -71,6 +72,7 @@ export const AdminSalaryTab: React.FC = () => {
   const [payMode, setPayMode] = useState<PaymentMode>('gpay');
   const [payNote, setPayNote] = useState('');
   const [payScreenshot, setPayScreenshot] = useState<string | undefined>(undefined);
+  const [uploadingProof, setUploadingProof] = useState(false);
 
   // Formal Salary Slip Studio
   const [slipStaffId, setSlipStaffId] = useState('');
@@ -563,7 +565,9 @@ export const AdminSalaryTab: React.FC = () => {
               </label>
               <label className="w-full h-10 px-3 rounded-xl border border-dashed border-slate-300 hover:border-[#2563EB] bg-slate-50 flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-600 cursor-pointer">
                 <Upload className="w-3.5 h-3.5 text-[#2563EB]" />
-                <span>{payScreenshot ? 'Attached ✓' : 'Attach Proof'}</span>
+                <span>
+                  {uploadingProof ? 'Uploading...' : payScreenshot ? 'Attached ✓' : 'Attach Proof'}
+                </span>
                 <input
                   type="file"
                   accept="image/*"
@@ -571,10 +575,16 @@ export const AdminSalaryTab: React.FC = () => {
                   onChange={async (e) => {
                     const f = e.target.files?.[0];
                     if (!f) return;
+                    setUploadingProof(true);
                     try {
-                      setPayScreenshot(await compressImageFileToBase64(f, 720));
+                      const compressed = await compressImageFileToBase64(f, 720);
+                      const uploaded = await uploadToCloudinary(compressed);
+                      setPayScreenshot(uploaded.url);
+                      pushToast({ type: 'success', title: 'Payment proof attached' });
                     } catch {
                       pushToast({ type: 'error', title: 'Could not read image' });
+                    } finally {
+                      setUploadingProof(false);
                     }
                   }}
                 />

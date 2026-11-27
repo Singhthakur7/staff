@@ -8,6 +8,7 @@ import {
   formatINR,
   getTodayISO,
 } from '../../utils/helpers';
+import { uploadToCloudinary } from '../../utils/cloudinary';
 
 export const StaffExpensesTab: React.FC<{ staff: StaffMember }> = ({ staff }) => {
   const { activeDb, submitStaffExpense, openLightbox, pushToast } = useStaffOnline();
@@ -16,18 +17,23 @@ export const StaffExpensesTab: React.FC<{ staff: StaffMember }> = ({ staff }) =>
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(() => getTodayISO());
   const [billPhotoUrl, setBillPhotoUrl] = useState<string | undefined>(undefined);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const myExpenses = activeDb.expenses.filter((e) => e.staffId === staff.id);
 
   const handleFileChange = async (file: File | null) => {
     if (!file) return;
+    setUploadingPhoto(true);
     try {
       const compressed = await compressImageFileToBase64(file, 720);
-      setBillPhotoUrl(compressed);
+      const uploaded = await uploadToCloudinary(compressed);
+      setBillPhotoUrl(uploaded.url);
       pushToast({ type: 'success', title: 'Bill photo attached' });
     } catch {
       pushToast({ type: 'error', title: 'Could not read bill image' });
+    } finally {
+      setUploadingPhoto(false);
     }
   };
 
@@ -108,7 +114,13 @@ export const StaffExpensesTab: React.FC<{ staff: StaffMember }> = ({ staff }) =>
             </label>
             <label className="w-full h-11 px-4 rounded-xl border border-dashed border-slate-300 hover:border-[#2563EB] bg-slate-50 flex items-center justify-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer">
               <Upload className="w-4 h-4 text-[#2563EB]" />
-              <span>{billPhotoUrl ? 'Bill Photo Ready ✓ (Tap to change)' : 'Upload Bill Photo'}</span>
+              <span>
+                {uploadingPhoto
+                  ? 'Uploading photo...'
+                  : billPhotoUrl
+                    ? 'Bill Photo Ready ✓ (Tap to change)'
+                    : 'Upload Bill Photo'}
+              </span>
               <input
                 type="file"
                 accept="image/*"
@@ -124,6 +136,7 @@ export const StaffExpensesTab: React.FC<{ staff: StaffMember }> = ({ staff }) =>
             <img
               src={billPhotoUrl}
               alt="Bill preview"
+              referrerPolicy="no-referrer"
               className="h-28 w-auto rounded-xl border border-slate-200 object-cover"
             />
             <button
@@ -178,6 +191,7 @@ export const StaffExpensesTab: React.FC<{ staff: StaffMember }> = ({ staff }) =>
                       <img
                         src={exp.billPhotoUrl}
                         alt="Bill thumbnail"
+                        referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"
                       />
                     </button>

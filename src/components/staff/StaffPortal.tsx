@@ -101,6 +101,7 @@ export const StaffPortal: React.FC = () => {
                   <img
                     src={session.verifiedSelfieUrl}
                     alt={`${staff.name} verified selfie`}
+                    referrerPolicy="no-referrer"
                     className="w-full h-full object-cover"
                   />
                 ) : (

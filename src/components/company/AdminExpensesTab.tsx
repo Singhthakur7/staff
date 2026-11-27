@@ -46,6 +46,7 @@ export const AdminExpensesTab: React.FC = () => {
                     <img
                       src={exp.billPhotoUrl}
                       alt={`Bill by ${exp.staffName}`}
+                      referrerPolicy="no-referrer"
                       className="w-full h-full object-cover"
                     />
                   </button>
@@ -117,6 +118,7 @@ export const AdminExpensesTab: React.FC = () => {
                       <img
                         src={exp.billPhotoUrl}
                         alt="Bill thumbnail"
+                        referrerPolicy="no-referrer"
                         className="w-full h-full object-cover"
                       />
                     </button>

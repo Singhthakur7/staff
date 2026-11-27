@@ -25,6 +25,7 @@ import {
   formatINR,
   safeCopyText,
 } from '../utils/helpers';
+import { uploadToCloudinary } from '../utils/cloudinary';
 
 export const GlobalOverlays: React.FC = () => {
   const {
@@ -51,6 +52,7 @@ export const GlobalOverlays: React.FC = () => {
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [utr, setUtr] = useState('');
   const [screenshotUrl, setScreenshotUrl] = useState<string | undefined>(undefined);
+  const [uploadingScreenshot, setUploadingScreenshot] = useState(false);
   const [submittingGPay, setSubmittingGPay] = useState(false);
 
   useEffect(() => {
@@ -105,12 +107,16 @@ export const GlobalOverlays: React.FC = () => {
 
   const handleScreenshotUpload = async (file: File | null) => {
     if (!file) return;
+    setUploadingScreenshot(true);
     try {
       const compressed = await compressImageFileToBase64(file, 720);
-      setScreenshotUrl(compressed);
+      const uploaded = await uploadToCloudinary(compressed);
+      setScreenshotUrl(uploaded.url);
       pushToast({ type: 'success', title: 'Payment screenshot attached' });
     } catch {
       pushToast({ type: 'error', title: 'Could not process screenshot' });
+    } finally {
+      setUploadingScreenshot(false);
     }
   };
 
@@ -326,7 +332,13 @@ export const GlobalOverlays: React.FC = () => {
                   </label>
                   <label className="w-full h-11 px-3 rounded-xl border border-dashed border-slate-300 hover:border-[#2563EB] bg-slate-50 flex items-center justify-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer">
                     <Upload className="w-3.5 h-3.5 text-[#2563EB]" />
-                    <span>{screenshotUrl ? 'Screenshot Attached ✓' : 'Attach Proof'}</span>
+                    <span>
+                      {uploadingScreenshot
+                        ? 'Uploading...'
+                        : screenshotUrl
+                          ? 'Screenshot Attached ✓'
+                          : 'Attach Proof'}
+                    </span>
                     <input
                       type="file"
                       accept="image/*"
@@ -424,17 +436,32 @@ export const GlobalOverlays: React.FC = () => {
           onClick={closeLightbox}
         >
           <div className="relative max-w-3xl w-full flex flex-col items-center">
-            <button
-              type="button"
-              onClick={closeLightbox}
-              className="self-end mb-3 p-2.5 rounded-full bg-white/15 hover:bg-white/25 text-white"
-              aria-label="Close preview"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="self-end mb-3 flex items-center gap-2">
+              {lightboxUrl.startsWith('http') && (
+                <a
+                  href={lightboxUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="px-3 py-2 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-semibold inline-flex items-center gap-1.5"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Open Full Photo
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={closeLightbox}
+                className="p-2.5 rounded-full bg-white/15 hover:bg-white/25 text-white"
+                aria-label="Close preview"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
             <img
               src={lightboxUrl}
               alt="Zoomed proof preview"
+              referrerPolicy="no-referrer"
               className="max-h-[82vh] max-w-full rounded-2xl border border-white/15 shadow-2xl object-contain bg-slate-900"
               onClick={(e) => e.stopPropagation()}
             />

@@ -23,6 +23,7 @@ import {
   EMPTY_COMPANY_DB,
   ExpenseRecord,
   GPayModalPayload,
+  GpsStamp,
   Language,
   LiveInstruction,
   ManualLedgerEntry,
@@ -41,11 +42,14 @@ import {
   addDaysISO,
   addYearsISO,
   formatINR,
+  formatShiftDuration,
+  formatTimeIN,
   getCurrentTimeHHMM,
   getTodayISO,
   slugifyCompany,
   uid,
 } from '../utils/helpers';
+import { uploadToCloudinary } from '../utils/cloudinary';
 
 const SESSION_KEY = 'staff_online_session_v1';
 const LANG_KEY = 'staff_online_lang_v1';
@@ -95,6 +99,23 @@ interface StaffOnlineContextValue {
     gpsLng?: number;
     gpsLabel?: string;
   }) => Promise<{ ok: boolean; error?: string }>;
+  punchOutStaffWithSelfie: (params: {
+    companyId: string;
+    identifier: string;
+    password: string;
+    selfieUrl: string;
+    gpsLat?: number;
+    gpsLng?: number;
+    gpsLabel?: string;
+  }) => Promise<{
+    ok: boolean;
+    error?: string;
+    staffName?: string;
+    workTitle?: string;
+    durationText?: string;
+    dutyWage?: number;
+    punchOutTime?: string;
+  }>;
   logout: () => void;
   // Super Admin & Public Trial Registration
   registerCompany: (input: {
@@ -148,16 +169,18 @@ interface StaffOnlineContextValue {
     mode: string;
     fromLocation: string;
     toLocation: string;
-    workTime: string;
-    departTime: string;
-    arriveTime: string;
     dutyWage: number;
     selfieUrl?: string;
     gpsLat?: number;
     gpsLng?: number;
     gpsLabel?: string;
   }) => Promise<void>;
-  punchOutDuty: (punchId: string) => Promise<void>;
+  recordDutyMilestone: (
+    punchId: string,
+    milestone: 'departed' | 'arrived' | 'work_completed' | 'punched_out',
+    gps?: GpsStamp
+  ) => Promise<boolean>;
+  punchOutDuty: (punchId: string, gps?: GpsStamp) => Promise<void>;
   updatePunchLog: (punchId: string, updates: Partial<PunchLogRecord>) => Promise<void>;
   // Live Instructions
   sendLiveInstruction: (staffId: string, message: string) => Promise<void>;
@@ -434,6 +457,9 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
         return { ok: false, error: 'Your staff account is currently disabled by Company Admin.' };
       }
 
+      const uploadRes = await uploadToCloudinary(params.selfieUrl);
+      const hostedSelfieUrl = uploadRes.url || params.selfieUrl;
+
       const nowIso = new Date().toISOString();
       const todayIso = getTodayISO();
       const currentHHMM = getCurrentTimeHHMM();
@@ -457,7 +483,7 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
         punchOutTime: nowIso,
         status: 'completed',
         dutyWage: 0,
-        selfieUrl: params.selfieUrl,
+        selfieUrl: hostedSelfieUrl,
         gpsLat: params.gpsLat,
         gpsLng: params.gpsLng,
         gpsLabel: params.gpsLabel || 'GPS Captured',
@@ -481,7 +507,7 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
         staffId: matchedStaff.id,
         name: matchedStaff.name,
         email: matchedStaff.email,
-        verifiedSelfieUrl: params.selfieUrl,
+        verifiedSelfieUrl: hostedSelfieUrl,
         verifiedAt: nowIso,
       };
       setSession(nextSession);
@@ -491,6 +517,106 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
         title: `Live Selfie Verified — Welcome, ${matchedStaff.name}`,
       });
       return { ok: true };
+    },
+    [root.companies, root.companyData, pushNotification, pushToast]
+  );
+
+  const punchOutStaffWithSelfie = useCallback(
+    async (params: {
+      companyId: string;
+      identifier: string;
+      password: string;
+      selfieUrl: string;
+      gpsLat?: number;
+      gpsLng?: number;
+      gpsLabel?: string;
+    }) => {
+      const company = root.companies[params.companyId];
+      if (!company) {
+        return { ok: false, error: 'Selected company was not found.' };
+      }
+      if (!company.active) {
+        return { ok: false, error: 'This company account is suspended.' };
+      }
+      if (!params.selfieUrl) {
+        return { ok: false, error: 'Live front-camera selfie capture is mandatory before Punch-Out.' };
+      }
+
+      const db = root.companyData[company.id] || EMPTY_COMPANY_DB;
+      const ident = params.identifier.trim().toLowerCase();
+      const cleanDigits = ident.replace(/[^0-9]/g, '');
+
+      const matchedStaff = db.staff.find((s) => {
+        const emailMatch = s.email.trim().toLowerCase() === ident;
+        const phoneDigits = s.phone.replace(/[^0-9]/g, '');
+        const phoneMatch =
+          Boolean(cleanDigits) &&
+          (phoneDigits === cleanDigits || phoneDigits.endsWith(cleanDigits));
+        const idMatch = s.id === params.identifier;
+        return (emailMatch || phoneMatch || idMatch) && s.password === params.password;
+      });
+
+      if (!matchedStaff) {
+        return { ok: false, error: 'Invalid staff email/phone or password.' };
+      }
+      if (!matchedStaff.active) {
+        return { ok: false, error: 'Your staff account is currently disabled by Company Admin.' };
+      }
+
+      const activeDuty = db.punchLogs.find(
+        (p) => p.staffId === matchedStaff.id && p.type === 'duty_punch' && p.status === 'active'
+      );
+      if (!activeDuty) {
+        return {
+          ok: false,
+          error:
+            'No open/active duty shift found to Punch-Out. Choose "Punch-In & Login" to start a shift.',
+        };
+      }
+
+      const uploadRes = await uploadToCloudinary(params.selfieUrl);
+      const hostedSelfieUrl = uploadRes.url || params.selfieUrl;
+      const nowIso = new Date().toISOString();
+      const durationText = formatShiftDuration(activeDuty.punchInTime, nowIso);
+      const punchOutGps: GpsStamp = {
+        lat: params.gpsLat,
+        lng: params.gpsLng,
+        label: params.gpsLabel || 'GPS Captured',
+      };
+
+      await dbUpdatePath(
+        `staff_online/company_data/${company.id}/punchLogs/${activeDuty.id}`,
+        {
+          punchOutTime: nowIso,
+          punchOutGps,
+          punchOutSelfieUrl: hostedSelfieUrl,
+          dutyStage: 'punched_out',
+          status: 'completed',
+          totalDurationText: durationText,
+        }
+      );
+
+      await pushNotification(company.id, {
+        targetRole: 'company_admin',
+        title: `Live Selfie Punch-Out: ${matchedStaff.name}`,
+        message: `${matchedStaff.name} punched out from "${activeDuty.workTitle}" at ${formatTimeIN(nowIso)} (Duration: ${durationText} · Wage: ${formatINR(activeDuty.dutyWage)}).`,
+        category: 'punch',
+      });
+
+      pushToast({
+        type: 'success',
+        title: `Punch-Out recorded at ${formatTimeIN(nowIso)}`,
+        detail: `Shift completed (${durationText}) · ${formatINR(activeDuty.dutyWage)} credited`,
+      });
+
+      return {
+        ok: true,
+        staffName: matchedStaff.name,
+        workTitle: activeDuty.workTitle,
+        durationText,
+        dutyWage: activeDuty.dutyWage,
+        punchOutTime: nowIso,
+      };
     },
     [root.companies, root.companyData, pushNotification, pushToast]
   );
@@ -853,7 +979,7 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
     [activeCompanyId, activeDb.staff, pushNotification, pushToast]
   );
 
-  // Duty Punching
+  // Duty Punching (100% Automatic Live Timestamps)
   const addDutyPunchIn = useCallback(
     async (input: {
       workTitle: string;
@@ -861,9 +987,6 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
       mode: string;
       fromLocation: string;
       toLocation: string;
-      workTime: string;
-      departTime: string;
-      arriveTime: string;
       dutyWage: number;
       selfieUrl?: string;
       gpsLat?: number;
@@ -873,6 +996,11 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (!activeCompanyId || !session?.staffId) return;
       const staff = activeDb.staff.find((s) => s.id === session.staffId);
       if (!staff) return;
+
+      const rawSelfie = input.selfieUrl || session.verifiedSelfieUrl || '';
+      const hostedSelfie = rawSelfie
+        ? (await uploadToCloudinary(rawSelfie)).url || rawSelfie
+        : '';
 
       const id = uid('punch');
       const nowIso = new Date().toISOString();
@@ -887,13 +1015,14 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
         mode: input.mode || 'On-Site Duty',
         fromLocation: input.fromLocation.trim(),
         toLocation: input.toLocation.trim(),
-        workTime: input.workTime,
-        departTime: input.departTime,
-        arriveTime: input.arriveTime,
+        workTime: getCurrentTimeHHMM(),
+        departTime: '',
+        arriveTime: '',
         punchInTime: nowIso,
+        dutyStage: 'punched_in',
         status: 'active',
         dutyWage: Math.max(0, Number(input.dutyWage) || staff.dutyWage),
-        selfieUrl: input.selfieUrl || session.verifiedSelfieUrl || '',
+        selfieUrl: hostedSelfie,
         gpsLat: input.gpsLat,
         gpsLng: input.gpsLng,
         gpsLabel: input.gpsLabel || 'GPS Captured',
@@ -903,26 +1032,126 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
       await dbSetPath(`staff_online/company_data/${activeCompanyId}/punchLogs/${id}`, record);
       await pushNotification(activeCompanyId, {
         targetRole: 'company_admin',
-        title: `Duty Punch-In: ${staff.name}`,
-        message: `${staff.name} punched in for "${record.workTitle}" (${record.fromLocation || 'Base'} → ${record.toLocation || 'Venue'}) • ${formatINR(record.dutyWage)}`,
+        title: `▶️ Punch-In: ${staff.name}`,
+        message: `${staff.name} started "${record.workTitle}" at ${formatTimeIN(nowIso)} (${record.fromLocation || 'Base'} → ${record.toLocation || 'Venue'}) • ${formatINR(record.dutyWage)}`,
         category: 'punch',
       });
-      pushToast({ type: 'success', title: 'Duty Punch-In recorded' });
+      pushToast({
+        type: 'success',
+        title: `Punch-In recorded: ${formatTimeIN(nowIso)}`,
+        detail: 'Follow the 4 live duty buttons to stamp Departed, Arrived, Completed & Punch-Out.',
+      });
     },
     [activeCompanyId, activeDb.staff, session, pushNotification, pushToast]
   );
 
-  const punchOutDuty = useCallback(
-    async (punchId: string) => {
-      if (!activeCompanyId) return;
+  const recordDutyMilestone = useCallback(
+    async (
+      punchId: string,
+      milestone: 'departed' | 'arrived' | 'work_completed' | 'punched_out',
+      gps?: GpsStamp
+    ): Promise<boolean> => {
+      if (!activeCompanyId) return false;
+      const target = activeDb.punchLogs.find((p) => p.id === punchId);
+      if (!target) return false;
+
       const nowIso = new Date().toISOString();
+      const gpsPayload: GpsStamp = {
+        lat: gps?.lat,
+        lng: gps?.lng,
+        label: gps?.label || 'GPS Captured',
+      };
+
+      if (milestone === 'departed') {
+        if (target.departTime) return false;
+        await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/punchLogs/${punchId}`, {
+          departTime: nowIso,
+          departGps: gpsPayload,
+          dutyStage: 'departed',
+        });
+        await pushNotification(activeCompanyId, {
+          targetRole: 'company_admin',
+          title: `🚀 Departed: ${target.staffName}`,
+          message: `${target.staffName} departed for "${target.workTitle}" (${target.fromLocation || 'Base'} → ${target.toLocation || 'Venue'}) at ${formatTimeIN(nowIso)}.`,
+          category: 'punch',
+        });
+        pushToast({
+          type: 'success',
+          title: `✅ Departed time recorded: ${formatTimeIN(nowIso)}`,
+        });
+        return true;
+      }
+
+      if (milestone === 'arrived') {
+        if (target.arriveTime) return false;
+        await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/punchLogs/${punchId}`, {
+          arriveTime: nowIso,
+          arriveGps: gpsPayload,
+          dutyStage: 'arrived',
+        });
+        await pushNotification(activeCompanyId, {
+          targetRole: 'company_admin',
+          title: `📍 Arrived On Site: ${target.staffName}`,
+          message: `${target.staffName} arrived at ${target.toLocation || 'Venue'} for "${target.workTitle}" at ${formatTimeIN(nowIso)}.`,
+          category: 'punch',
+        });
+        pushToast({
+          type: 'success',
+          title: `✅ Arrived time recorded: ${formatTimeIN(nowIso)}`,
+        });
+        return true;
+      }
+
+      if (milestone === 'work_completed') {
+        if (target.workCompletedTime) return false;
+        await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/punchLogs/${punchId}`, {
+          workCompletedTime: nowIso,
+          workCompletedGps: gpsPayload,
+          dutyStage: 'work_completed',
+        });
+        await pushNotification(activeCompanyId, {
+          targetRole: 'company_admin',
+          title: `✅ Work Completed: ${target.staffName}`,
+          message: `${target.staffName} marked "${target.workTitle}" completed at ${formatTimeIN(nowIso)}.`,
+          category: 'punch',
+        });
+        pushToast({
+          type: 'success',
+          title: `✅ Work Completed recorded: ${formatTimeIN(nowIso)}`,
+        });
+        return true;
+      }
+
+      // milestone === 'punched_out'
+      const durationText = formatShiftDuration(target.punchInTime, nowIso);
       await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/punchLogs/${punchId}`, {
-        status: 'completed',
         punchOutTime: nowIso,
+        punchOutGps: gpsPayload,
+        dutyStage: 'punched_out',
+        status: 'completed',
+        totalDurationText: durationText,
       });
-      pushToast({ type: 'success', title: 'Duty Punch-Out completed' });
+      await pushNotification(activeCompanyId, {
+        targetRole: 'company_admin',
+        title: `⏹️ Punch-Out Completed: ${target.staffName}`,
+        message: `${target.staffName} punched out from "${target.workTitle}" at ${formatTimeIN(nowIso)} · Duration: ${durationText} · Wage credited: ${formatINR(target.dutyWage)}.`,
+        category: 'punch',
+      });
+      pushToast({
+        type: 'success',
+        title: `✅ Punch-Out recorded: ${formatTimeIN(nowIso)}`,
+        detail: `Total Shift: ${durationText} · ${formatINR(target.dutyWage)} added to Salary Ledger`,
+      });
+      return true;
     },
-    [activeCompanyId, pushToast]
+    [activeCompanyId, activeDb.punchLogs, pushNotification, pushToast]
+  );
+
+  const punchOutDuty = useCallback(
+    async (punchId: string, gps?: GpsStamp) => {
+      await recordDutyMilestone(punchId, 'punched_out', gps);
+    },
+    [recordDutyMilestone]
   );
 
   const updatePunchLog = useCallback(
@@ -1284,6 +1513,7 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
     loginSuperAdmin,
     loginCompanyAdmin,
     loginStaffWithSelfie,
+    punchOutStaffWithSelfie,
     logout,
     registerCompany,
     updateCompany,
@@ -1300,6 +1530,7 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
     reportStaffPaymentIssue,
     sendDueDateNotification,
     addDutyPunchIn,
+    recordDutyMilestone,
     punchOutDuty,
     updatePunchLog,
     sendLiveInstruction,

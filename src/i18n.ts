@@ -17,6 +17,7 @@ const EN: Dict = {
   noNotifications: 'No live alerts yet.',
   // Super Admin Tabs
   superCompanies: 'Company & Plan Details',
+  superSelfieLogs: 'Live Selfie Verification',
   superStaffLedger: 'Staff & Salary Ledger',
   superCustomers: 'Customer Full Details',
   superPasswords: 'Password Generator',
@@ -62,6 +63,7 @@ const ML: Dict = {
   noNotifications: 'പുതിയ അറിയിപ്പുകൾ ഒന്നുമില്ല.',
   // Super Admin Tabs
   superCompanies: 'കമ്പനി & പ്ലാൻ വിവരങ്ങൾ',
+  superSelfieLogs: 'ലൈവ് സെൽഫി വെരിഫിക്കേഷൻ',
   superStaffLedger: 'സ്റ്റാഫ് & സാലറി ലെഡ്ജർ',
   superCustomers: 'കസ്റ്റമർ ഫുൾ ഡീറ്റെയിൽസ്',
   superPasswords: 'പാസ്സ്വേർഡ് ജനറേറ്റർ',

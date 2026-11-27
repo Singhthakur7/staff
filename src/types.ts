@@ -2,7 +2,12 @@ export type Language = 'en' | 'ml';
 
 export type UserRole = 'super_admin' | 'company_admin' | 'staff';
 
-export type SuperAdminTab = 'companies' | 'staff_ledger' | 'customers' | 'passwords';
+export type SuperAdminTab =
+  | 'companies'
+  | 'selfie_logs'
+  | 'staff_ledger'
+  | 'customers'
+  | 'passwords';
 
 export type CompanyAdminTab =
   | 'salary'
@@ -84,6 +89,19 @@ export interface AdvancePaymentRecord {
   createdAt: string;
 }
 
+export type DutyStage =
+  | 'punched_in'
+  | 'departed'
+  | 'arrived'
+  | 'work_completed'
+  | 'punched_out';
+
+export interface GpsStamp {
+  lat?: number;
+  lng?: number;
+  label?: string;
+}
+
 export interface PunchLogRecord {
   id: string;
   staffId: string;
@@ -92,20 +110,28 @@ export interface PunchLogRecord {
   type: 'login_selfie' | 'duty_punch';
   workTitle: string;
   date: string; // YYYY-MM-DD (When / Date)
-  mode: string; // How / Mode (e.g. On-Site, Own Camera, Studio)
+  mode: string; // How / Mode (e.g. On-Site Duty, Studio Van, Multi-Cam)
   fromLocation: string;
   toLocation: string;
   workTime: string;
-  departTime: string;
-  arriveTime: string;
-  punchInTime: string; // ISO
-  punchOutTime?: string; // ISO
+  departTime: string; // ISO timestamp (or legacy HH:mm)
+  arriveTime: string; // ISO timestamp (or legacy HH:mm)
+  workCompletedTime?: string; // ISO timestamp
+  punchInTime: string; // ISO timestamp
+  punchOutTime?: string; // ISO timestamp
+  dutyStage?: DutyStage;
+  totalDurationText?: string; // HH:MM
   status: 'active' | 'completed';
   dutyWage: number;
   selfieUrl: string;
+  punchOutSelfieUrl?: string;
   gpsLat?: number;
   gpsLng?: number;
   gpsLabel?: string;
+  departGps?: GpsStamp;
+  arriveGps?: GpsStamp;
+  workCompletedGps?: GpsStamp;
+  punchOutGps?: GpsStamp;
   editedAt?: string;
   createdAt: string;
 }
@@ -286,6 +312,8 @@ export const STAFF_ROLES: string[] = [
 
 export const DUTY_MODES: string[] = [
   'On-Site Duty',
+  'Studio Van',
+  'Multi-Cam',
   'Own Camera / Gear',
   'Live Streaming',
   'LED Wall Setup',
