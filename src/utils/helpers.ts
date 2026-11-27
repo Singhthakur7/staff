@@ -1,423 +1,490 @@
-import { RateMode, StaffAccount } from '../types';
+import { CompanyDatabase, PasswordProfile, StaffMember } from '../types';
 
-export const SESSION_STORAGE_KEY = 'saas_erp_auth_session_v1';
-export const LANG_STORAGE_KEY = 'saas_erp_lang_v1';
-
-export function safeSessionGet<T>(key: string, fallback: T): T {
-  try {
-    if (typeof window === 'undefined' || !window.localStorage) return fallback;
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
+export function uid(prefix = 'id'): string {
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${prefix}_${Date.now().toString(36)}_${rand}`;
 }
 
-export function safeSessionSet(key: string, value: unknown): boolean {
-  try {
-    if (typeof window === 'undefined' || !window.localStorage) return false;
-    if (value === null || value === undefined) {
-      window.localStorage.removeItem(key);
-    } else {
-      window.localStorage.setItem(key, JSON.stringify(value));
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function safeCopyText(text: string): Promise<boolean> {
-  try {
-    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // Fallback below
-  }
-  try {
-    if (typeof document !== 'undefined') {
-      const el = document.createElement('textarea');
-      el.value = text;
-      el.style.position = 'fixed';
-      el.style.opacity = '0';
-      document.body.appendChild(el);
-      el.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(el);
-      return ok;
-    }
-  } catch {
-    return false;
-  }
-  return false;
-}
-
-export interface GeoCoords {
-  lat: number;
-  lng: number;
-  label: string;
-  isFallback: boolean;
-}
-
-export const KOTTAYAM_FALLBACK: GeoCoords = {
-  lat: 9.5595,
-  lng: 76.7874,
-  label: 'Kottayam, Kerala (Fallback)',
-  isFallback: true,
-};
-
-export function getSafeLocation(): Promise<GeoCoords> {
-  return new Promise((resolve) => {
-    try {
-      if (typeof navigator === 'undefined' || !navigator.geolocation) {
-        resolve(KOTTAYAM_FALLBACK);
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const lat = Number(pos.coords.latitude.toFixed(5));
-          const lng = Number(pos.coords.longitude.toFixed(5));
-          resolve({
-            lat,
-            lng,
-            label: `${lat.toFixed(4)}° N, ${lng.toFixed(4)}° E`,
-            isFallback: false,
-          });
-        },
-        () => resolve(KOTTAYAM_FALLBACK),
-        { enableHighAccuracy: true, timeout: 6000, maximumAge: 30000 }
-      );
-    } catch {
-      resolve(KOTTAYAM_FALLBACK);
-    }
-  });
-}
-
-export function formatINR(amount: number): string {
-  const safe = Number.isFinite(amount) ? amount : 0;
-  const isNeg = safe < 0;
-  const formatted = Math.abs(Math.round(safe)).toLocaleString('en-IN');
-  return `${isNeg ? '-' : ''}₹${formatted}`;
-}
-
-export function numberToIndianWords(num: number): string {
-  const n = Math.abs(Math.round(num));
-  if (n === 0) return 'Zero Rupees Only';
-
-  const ones = [
-    '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
-    'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen',
-    'Seventeen', 'Eighteen', 'Nineteen',
-  ];
-  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-
-  const twoDigits = (x: number): string => {
-    if (x < 20) return ones[x];
-    const t = Math.floor(x / 10);
-    const o = x % 10;
-    return `${tens[t]}${o ? ' ' + ones[o] : ''}`;
-  };
-
-  const threeDigits = (x: number): string => {
-    const h = Math.floor(x / 100);
-    const rem = x % 100;
-    if (h && rem) return `${ones[h]} Hundred and ${twoDigits(rem)}`;
-    if (h) return `${ones[h]} Hundred`;
-    return twoDigits(rem);
-  };
-
-  const crore = Math.floor(n / 10000000);
-  const lakh = Math.floor((n % 10000000) / 100000);
-  const thousand = Math.floor((n % 100000) / 1000);
-  const rest = n % 1000;
-
-  const parts: string[] = [];
-  if (crore) parts.push(`${twoDigits(crore)} Crore`);
-  if (lakh) parts.push(`${twoDigits(lakh)} Lakh`);
-  if (thousand) parts.push(`${twoDigits(thousand)} Thousand`);
-  if (rest) parts.push(threeDigits(rest));
-
-  const prefix = num < 0 ? 'Minus ' : '';
-  return `${prefix}Rupees ${parts.join(' ')} Only`;
-}
-
-export function calculateShiftWage(baseRate: number, rateMode: RateMode): number {
-  switch (rateMode) {
-    case 'half':
-      return Math.round(baseRate * 0.5);
-    case 'own_camera':
-      return 3000;
-    case 'live_single_cam':
-      return 6000;
-    case 'regular':
-    default:
-      return baseRate;
-  }
-}
-
-export function getRateModeLabel(rateMode: RateMode): string {
-  switch (rateMode) {
-    case 'regular':
-      return 'Regular Full Day';
-    case 'half':
-      return 'Half Day (50%)';
-    case 'own_camera':
-      return 'Own Camera (₹3,000)';
-    case 'live_single_cam':
-      return 'Live Single Cam (₹6,000)';
-  }
-}
-
-export function formatDurationHHMMSS(startIso: string, endIso?: string): string {
-  const start = new Date(startIso).getTime();
-  const end = endIso ? new Date(endIso).getTime() : Date.now();
-  const diffSec = Math.max(0, Math.floor((end - start) / 1000));
-  const hrs = Math.floor(diffSec / 3600);
-  const mins = Math.floor((diffSec % 3600) / 60);
-  const secs = diffSec % 60;
-  return [hrs, mins, secs].map((v) => String(v).padStart(2, '0')).join(':');
+export function formatINR(value: number): string {
+  const n = Number.isFinite(value) ? Math.round(value) : 0;
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  return `${sign}₹${abs.toLocaleString('en-IN')}`;
 }
 
 export function getTodayISO(): string {
   const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return `${y}-${m}-${day}`;
 }
 
-export function getCurrentMonthYM(): string {
+export function getCurrentMonthISO(): string {
+  return getTodayISO().slice(0, 7);
+}
+
+export function getCurrentTimeHHMM(): string {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function shiftMonthYM(ym: string, deltaMonths: number): string {
-  const [y, m] = ym.split('-').map(Number);
-  const d = new Date(y, (m || 1) - 1 + deltaMonths, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+export function addDaysISO(isoDate: string, days: number): string {
+  const base = isoDate ? new Date(`${isoDate}T00:00:00`) : new Date();
+  base.setDate(base.getDate() + days);
+  const y = base.getFullYear();
+  const m = String(base.getMonth() + 1).padStart(2, '0');
+  const day = String(base.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
-export function formatMonthLabel(ym: string): string {
-  if (!ym || !ym.includes('-')) return ym;
-  const [y, m] = ym.split('-').map(Number);
-  const d = new Date(y, (m || 1) - 1, 1);
-  return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+export function addYearsISO(isoDate: string, years: number): string {
+  const base = isoDate ? new Date(`${isoDate}T00:00:00`) : new Date();
+  base.setFullYear(base.getFullYear() + years);
+  const y = base.getFullYear();
+  const m = String(base.getMonth() + 1).padStart(2, '0');
+  const day = String(base.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
-export function formatDateTimeShort(iso: string): string {
+export function formatDateIN(isoDate?: string): string {
+  if (!isoDate) return '—';
   try {
-    const d = new Date(iso);
-    return d.toLocaleString('en-IN', {
+    const parsed = isoDate.length === 10 ? new Date(`${isoDate}T00:00:00`) : new Date(isoDate);
+    if (Number.isNaN(parsed.getTime())) return isoDate;
+    return parsed.toLocaleDateString('en-IN', {
       day: '2-digit',
       month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return isoDate;
+  }
+}
+
+export function formatTimeIN(isoOrHHMM?: string): string {
+  if (!isoOrHHMM) return '—';
+  if (/^\d{2}:\d{2}$/.test(isoOrHHMM)) {
+    const [hStr, mStr] = isoOrHHMM.split(':');
+    const h = Number(hStr);
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `${String(h12).padStart(2, '0')}:${mStr} ${suffix}`;
+  }
+  try {
+    const d = new Date(isoOrHHMM);
+    if (Number.isNaN(d.getTime())) return isoOrHHMM;
+    return d.toLocaleTimeString('en-IN', {
       hour: '2-digit',
       minute: '2-digit',
       hour12: true,
     });
   } catch {
-    return iso;
+    return isoOrHHMM;
   }
 }
 
-export function buildUpiUrl(params: {
-  upiId: string;
-  name: string;
-  amount: number;
-  note: string;
-}): string {
-  const q = new URLSearchParams({
-    pa: params.upiId.trim(),
-    pn: params.name.trim(),
-    am: String(Math.max(1, Math.round(params.amount))),
-    cu: 'INR',
-    tn: params.note.slice(0, 60),
-  });
-  return `upi://pay?${q.toString()}`;
-}
-
-export function buildGpayDeepLink(params: {
-  upiId: string;
-  name: string;
-  amount: number;
-  note: string;
-}): string {
-  const q = new URLSearchParams({
-    pa: params.upiId.trim(),
-    pn: params.name.trim(),
-    am: String(Math.max(1, Math.round(params.amount))),
-    cu: 'INR',
-    tn: params.note.slice(0, 60),
-  });
-  return `tez://upi/pay?${q.toString()}`;
-}
-
-export function buildWhatsAppUrl(phone: string, message: string): string {
-  const cleanPhone = (phone || '').replace(/[^0-9]/g, '');
-  const formatted = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-  return `https://wa.me/${formatted}?text=${encodeURIComponent(message)}`;
-}
-
-export function buildMapsUrl(lat: number, lng: number): string {
-  return `https://www.google.com/maps?q=${lat},${lng}`;
+export function formatDateTimeIN(iso?: string): string {
+  if (!iso) return '—';
+  return `${formatDateIN(iso)}, ${formatTimeIN(iso)}`;
 }
 
 export function slugifyCompany(name: string): string {
   return (
     name
       .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
       .trim()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 32) || 'company'
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .slice(0, 36) || 'company'
   );
 }
 
-export function getCompanyInitials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return 'CO';
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-  return (words[0][0] + words[1][0]).toUpperCase();
-}
-
-export function generateStaffCredentials(
-  name: string,
-  companySlug = 'company',
-  randomize = false
-): {
-  email: string;
-  password: string;
-  upiId: string;
-} {
-  const slug =
-    name
+export function generateStaffEmail(staffName: string, companySlug: string): string {
+  const cleanName =
+    staffName
       .toLowerCase()
       .replace(/[^a-z0-9]/g, '')
-      .slice(0, 14) || 'staff';
-  const domain = `${companySlug.replace(/[^a-z0-9]/g, '').slice(0, 18) || 'company'}.in`;
-  if (!randomize) {
+      .slice(0, 18) || 'staff';
+  const cleanDomain = (companySlug || 'studio').replace(/[^a-z0-9]/g, '').slice(0, 18) || 'studio';
+  return `${cleanName}@${cleanDomain}.staff.online`;
+}
+
+export function generatePassword(
+  length = 10,
+  profile: PasswordProfile = 'strong'
+): string {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghijkmnopqrstuvwxyz';
+  const digits = '23456789';
+  const symbols = '!@#$%&*';
+
+  let charset = upper + lower + digits + symbols;
+  if (profile === 'alphanumeric') charset = upper + lower + digits;
+  if (profile === 'numeric') charset = '0123456789';
+
+  const result: string[] = [];
+  if (profile === 'strong') {
+    result.push(
+      upper[Math.floor(Math.random() * upper.length)],
+      lower[Math.floor(Math.random() * lower.length)],
+      digits[Math.floor(Math.random() * digits.length)],
+      symbols[Math.floor(Math.random() * symbols.length)]
+    );
+  }
+  while (result.length < length) {
+    result.push(charset[Math.floor(Math.random() * charset.length)]);
+  }
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result.join('');
+}
+
+export function amountToIndianWords(amount: number): string {
+  const num = Math.round(Math.abs(amount));
+  if (num === 0) return 'Zero Rupees Only';
+
+  const ones = [
+    '',
+    'One',
+    'Two',
+    'Three',
+    'Four',
+    'Five',
+    'Six',
+    'Seven',
+    'Eight',
+    'Nine',
+    'Ten',
+    'Eleven',
+    'Twelve',
+    'Thirteen',
+    'Fourteen',
+    'Fifteen',
+    'Sixteen',
+    'Seventeen',
+    'Eighteen',
+    'Nineteen',
+  ];
+  const tens = [
+    '',
+    '',
+    'Twenty',
+    'Thirty',
+    'Forty',
+    'Fifty',
+    'Sixty',
+    'Seventy',
+    'Eighty',
+    'Ninety',
+  ];
+
+  const twoDigits = (n: number): string => {
+    if (n < 20) return ones[n];
+    return `${tens[Math.floor(n / 10)]}${n % 10 ? ` ${ones[n % 10]}` : ''}`;
+  };
+
+  const threeDigits = (n: number): string => {
+    if (n === 0) return '';
+    if (n < 100) return twoDigits(n);
+    const h = Math.floor(n / 100);
+    const rem = n % 100;
+    return `${ones[h]} Hundred${rem ? ` and ${twoDigits(rem)}` : ''}`;
+  };
+
+  let remaining = num;
+  const parts: string[] = [];
+
+  const crore = Math.floor(remaining / 10000000);
+  if (crore > 0) {
+    parts.push(`${threeDigits(crore)} Crore`);
+    remaining %= 10000000;
+  }
+  const lakh = Math.floor(remaining / 100000);
+  if (lakh > 0) {
+    parts.push(`${twoDigits(lakh)} Lakh`);
+    remaining %= 100000;
+  }
+  const thousand = Math.floor(remaining / 1000);
+  if (thousand > 0) {
+    parts.push(`${twoDigits(thousand)} Thousand`);
+    remaining %= 1000;
+  }
+  if (remaining > 0) {
+    parts.push(threeDigits(remaining));
+  }
+
+  return `${amount < 0 ? 'Minus ' : ''}${parts.join(' ')} Rupees Only`;
+}
+
+export interface DueBadgeInfo {
+  status: 'settled' | 'due_today' | 'overdue' | 'upcoming';
+  label: string;
+  labelMl: string;
+  className: string;
+}
+
+export function getDueBadgeInfo(balancePayable: number, dueDate?: string): DueBadgeInfo {
+  if (balancePayable <= 0) {
     return {
-      email: `${slug}@${domain}`,
-      password: `${slug}@2026`,
-      upiId: `${slug}@okicici`,
+      status: 'settled',
+      label: 'Settled',
+      labelMl: 'തീർപ്പാക്കി',
+      className: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20',
     };
   }
-  const suffix = Math.floor(100 + Math.random() * 900);
-  const banks = ['okicici', 'okaxis', 'oksbi', 'okhdfc'];
-  const bank = banks[Math.floor(Math.random() * banks.length)];
-  return {
-    email: `${slug}${suffix}@${domain}`,
-    password: `${slug}@${suffix}`,
-    upiId: `${slug}${suffix}@${bank}`,
-  };
-}
-
-export function isSalaryDueWithin2Days(staff: StaffAccount): {
-  isDue: boolean;
-  daysUntil: number;
-} {
-  const today = new Date();
-  const currentDay = today.getDate();
-  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-  const targetDay = Math.min(Math.max(1, staff.salaryDay), daysInMonth);
-
-  let diff = targetDay - currentDay;
-  if (diff < 0) {
-    diff = daysInMonth - currentDay + targetDay;
+  const today = getTodayISO();
+  if (!dueDate) {
+    return {
+      status: 'upcoming',
+      label: 'Upcoming',
+      labelMl: 'വരാനിരിക്കുന്നു',
+      className: 'bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20',
+    };
+  }
+  if (dueDate === today) {
+    return {
+      status: 'due_today',
+      label: 'Due Today',
+      labelMl: 'ഇന്ന് നൽകണം',
+      className: 'bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/25',
+    };
+  }
+  if (dueDate < today) {
+    return {
+      status: 'overdue',
+      label: 'Overdue',
+      labelMl: 'കാലാവധി കഴിഞ്ഞു',
+      className: 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-600/20',
+    };
   }
   return {
-    isDue: diff >= 0 && diff <= 2,
-    daysUntil: diff,
+    status: 'upcoming',
+    label: 'Upcoming',
+    labelMl: 'വരാനിരിക്കുന്നു',
+    className: 'bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-600/20',
   };
 }
 
-export function getAppOrigin(): string {
+export interface StaffPayrollSummary {
+  earnedDutyWages: number;
+  approvedExpenses: number;
+  grossPayable: number;
+  advancesTaken: number;
+  settledPaid: number;
+  totalDeducted: number;
+  netBalancePayable: number;
+  workingDaysCount: number;
+  dutyPunches: CompanyDatabase['punchLogs'];
+  payments: CompanyDatabase['advances'];
+  expenses: CompanyDatabase['expenses'];
+  pendingConfirmationCount: number;
+  dueBadge: DueBadgeInfo;
+}
+
+export function calculateStaffSummary(
+  staff: StaffMember,
+  db: CompanyDatabase,
+  fromMonth?: string,
+  toMonth?: string
+): StaffPayrollSummary {
+  const inMonthRange = (isoDate: string): boolean => {
+    if (!isoDate) return true;
+    const ym = isoDate.slice(0, 7);
+    if (fromMonth && ym < fromMonth) return false;
+    if (toMonth && ym > toMonth) return false;
+    return true;
+  };
+
+  const dutyPunches = db.punchLogs.filter(
+    (p) => p.staffId === staff.id && p.type === 'duty_punch' && inMonthRange(p.date)
+  );
+  const expenses = db.expenses.filter(
+    (e) => e.staffId === staff.id && inMonthRange(e.date)
+  );
+  const payments = db.advances.filter(
+    (a) => a.staffId === staff.id && inMonthRange(a.date)
+  );
+
+  const earnedDutyWages = dutyPunches.reduce((sum, p) => sum + (Number(p.dutyWage) || 0), 0);
+  const approvedExpenses = expenses
+    .filter((e) => e.status === 'approved')
+    .reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+  const grossPayable = earnedDutyWages + approvedExpenses;
+
+  const advancesTaken = payments
+    .filter((p) => p.kind === 'advance')
+    .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  const settledPaid = payments
+    .filter((p) => p.kind === 'settlement')
+    .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  const totalDeducted = advancesTaken + settledPaid;
+  const netBalancePayable = grossPayable - totalDeducted;
+
+  const uniqueDates = new Set(dutyPunches.map((p) => p.date));
+  const pendingConfirmationCount = payments.filter(
+    (p) => p.confirmationStatus === 'pending'
+  ).length;
+
+  return {
+    earnedDutyWages,
+    approvedExpenses,
+    grossPayable,
+    advancesTaken,
+    settledPaid,
+    totalDeducted,
+    netBalancePayable,
+    workingDaysCount: uniqueDates.size,
+    dutyPunches,
+    payments,
+    expenses,
+    pendingConfirmationCount,
+    dueBadge: getDueBadgeInfo(netBalancePayable, staff.periodTo),
+  };
+}
+
+export function buildGPayDeepLinks(params: {
+  upiId: string;
+  payeeName: string;
+  amount: number;
+  note: string;
+}): { upiUrl: string; gpayUrl: string } {
+  const qs = new URLSearchParams({
+    pa: params.upiId.trim(),
+    pn: params.payeeName.trim(),
+    am: String(Math.max(1, Math.round(params.amount))),
+    cu: 'INR',
+    tn: params.note.slice(0, 60),
+  }).toString();
+  return {
+    upiUrl: `upi://pay?${qs}`,
+    gpayUrl: `tez://upi/pay?${qs}`,
+  };
+}
+
+export function sanitizePhoneForLink(phone: string): string {
+  const digits = phone.replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  if (digits.length === 10) return `91${digits}`;
+  return digits;
+}
+
+export function buildWhatsAppUrl(phone: string, text: string): string {
+  const clean = sanitizePhoneForLink(phone);
+  const encoded = encodeURIComponent(text);
+  return clean ? `https://wa.me/${clean}?text=${encoded}` : `https://wa.me/?text=${encoded}`;
+}
+
+export function buildSmsUrl(phone: string, text: string): string {
+  const clean = phone.replace(/[^0-9+]/g, '');
+  const encoded = encodeURIComponent(text);
+  return `sms:${clean}?body=${encoded}`;
+}
+
+export async function safeCopyText(text: string): Promise<boolean> {
   try {
-    if (typeof window !== 'undefined' && window.location.origin) {
-      return window.location.origin;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
     }
   } catch {
-    // Fallback
+    // fallback below
   }
-  return '';
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
-export function buildSlipShareUrl(
-  companyId: string,
-  staffId: string,
-  fromMonth: string,
-  toMonth: string
-): string {
-  const origin = getAppOrigin();
-  return `${origin}/#slip=company=${encodeURIComponent(companyId)}&staff=${encodeURIComponent(
-    staffId
-  )}&from=${encodeURIComponent(fromMonth)}&to=${encodeURIComponent(toMonth)}`;
-}
+export function captureMirroredVideoFrame(
+  video: HTMLVideoElement,
+  maxWidth = 480
+): string | null {
+  try {
+    if (!video || video.videoWidth === 0 || video.videoHeight === 0) return null;
+    const scale = Math.min(1, maxWidth / video.videoWidth);
+    const width = Math.round(video.videoWidth * scale);
+    const height = Math.round(video.videoHeight * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
 
-/**
- * Compress any HTMLCanvasElement to a lightweight Base64 JPEG strictly under 80KB for Firebase RTDB.
- */
-export function compressCanvasUnder80KB(canvas: HTMLCanvasElement, maxBytes = 76000): string {
-  let quality = 0.72;
-  let dataUrl = canvas.toDataURL('image/jpeg', quality);
-  while (dataUrl.length > maxBytes && quality > 0.22) {
-    quality -= 0.1;
-    dataUrl = canvas.toDataURL('image/jpeg', quality);
-  }
-  if (dataUrl.length > maxBytes) {
-    // Downscale by 65% once more if still large
-    const small = document.createElement('canvas');
-    small.width = Math.max(160, Math.round(canvas.width * 0.65));
-    small.height = Math.max(120, Math.round(canvas.height * 0.65));
-    const ctx = small.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(canvas, 0, 0, small.width, small.height);
-      dataUrl = small.toDataURL('image/jpeg', 0.55);
+    // Mirror horizontally for natural front-camera selfie
+    ctx.translate(width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, width, height);
+
+    let quality = 0.72;
+    let dataUrl = canvas.toDataURL('image/jpeg', quality);
+    while (dataUrl.length > 90000 && quality > 0.3) {
+      quality -= 0.1;
+      dataUrl = canvas.toDataURL('image/jpeg', quality);
     }
+    return dataUrl;
+  } catch {
+    return null;
   }
-  return dataUrl;
 }
 
-/**
- * Compress any uploaded image File to a lightweight Base64 JPEG (<80KB) suitable for Firebase RTDB.
- */
-export function fileToCompressedDataUrl(file: File, maxDim = 640): Promise<string> {
+export function compressImageFileToBase64(
+  file: File,
+  maxWidth = 720
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Failed to read image file'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        try {
+    try {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Could not read file'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('Invalid image file'));
+        img.onload = () => {
+          const scale = Math.min(1, maxWidth / img.width);
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
           const canvas = document.createElement('canvas');
-          let { width, height } = img;
-          if (width > maxDim || height > maxDim) {
-            const ratio = Math.min(maxDim / width, maxDim / height);
-            width = Math.round(width * ratio);
-            height = Math.round(height * ratio);
-          }
-          canvas.width = width;
-          canvas.height = height;
+          canvas.width = w;
+          canvas.height = h;
           const ctx = canvas.getContext('2d');
           if (!ctx) {
-            resolve(String(reader.result));
+            reject(new Error('Canvas unavailable'));
             return;
           }
-          ctx.drawImage(img, 0, 0, width, height);
-          resolve(compressCanvasUnder80KB(canvas));
-        } catch {
-          resolve(String(reader.result));
-        }
+          ctx.drawImage(img, 0, 0, w, h);
+          let quality = 0.72;
+          let dataUrl = canvas.toDataURL('image/jpeg', quality);
+          while (dataUrl.length > 90000 && quality > 0.3) {
+            quality -= 0.1;
+            dataUrl = canvas.toDataURL('image/jpeg', quality);
+          }
+          resolve(dataUrl);
+        };
+        img.src = String(reader.result || '');
       };
-      img.onerror = () => reject(new Error('Invalid image file'));
-      img.src = String(reader.result);
-    };
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(file);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
-export function uid(prefix: string): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+export function isMobileViewport(): boolean {
+  try {
+    return window.innerWidth < 1024;
+  } catch {
+    return false;
+  }
 }

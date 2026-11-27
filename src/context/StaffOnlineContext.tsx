@@ -1,0 +1,1332 @@
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
+import {
+  dbRemovePath,
+  dbSetPath,
+  dbUpdatePath,
+  DEFAULT_SUPER_ADMIN,
+  subscribeStaffOnlineRoot,
+} from '../firebase';
+import {
+  AdvancePaymentRecord,
+  AppNotification,
+  AuthSession,
+  CompanyDatabase,
+  CompanyRecord,
+  CustomerRecord,
+  EMPTY_COMPANY_DB,
+  ExpenseRecord,
+  GPayModalPayload,
+  Language,
+  LiveInstruction,
+  ManualLedgerEntry,
+  MultiCrewWork,
+  PaymentMode,
+  PlanStatus,
+  PunchLogRecord,
+  StaffMember,
+  StaffOnlineRootState,
+  SubcontractRecord,
+  SuperAdminConfig,
+  ToastMessage,
+  WhatsAppModalPayload,
+} from '../types';
+import {
+  addDaysISO,
+  addYearsISO,
+  formatINR,
+  getCurrentTimeHHMM,
+  getTodayISO,
+  slugifyCompany,
+  uid,
+} from '../utils/helpers';
+
+const SESSION_KEY = 'staff_online_session_v1';
+const LANG_KEY = 'staff_online_lang_v1';
+
+interface StaffOnlineContextValue {
+  isReady: boolean;
+  superAdmin: SuperAdminConfig;
+  companies: CompanyRecord[];
+  companiesMap: Record<string, CompanyRecord>;
+  companyDataMap: Record<string, CompanyDatabase>;
+  session: AuthSession | null;
+  inspectingCompanyId: string | null;
+  setInspectingCompanyId: (companyId: string | null) => void;
+  activeCompany: CompanyRecord | null;
+  activeDb: CompanyDatabase;
+  lang: Language;
+  toggleLang: () => void;
+  setLang: (lang: Language) => void;
+  // Overlays
+  toasts: ToastMessage[];
+  pushToast: (t: Omit<ToastMessage, 'id'>) => void;
+  dismissToast: (id: string) => void;
+  notificationsOpen: boolean;
+  setNotificationsOpen: (open: boolean) => void;
+  gpayModal: GPayModalPayload | null;
+  openGPayModal: (payload: GPayModalPayload) => void;
+  closeGPayModal: () => void;
+  whatsappModal: WhatsAppModalPayload | null;
+  openWhatsAppModal: (payload: WhatsAppModalPayload) => void;
+  closeWhatsAppModal: () => void;
+  lightboxUrl: string | null;
+  openLightbox: (url: string) => void;
+  closeLightbox: () => void;
+  // Auth
+  loginSuperAdmin: (email: string, password: string) => { ok: boolean; error?: string };
+  loginCompanyAdmin: (
+    email: string,
+    password: string,
+    companySlug?: string
+  ) => { ok: boolean; error?: string; company?: CompanyRecord };
+  loginStaffWithSelfie: (params: {
+    companyId: string;
+    identifier: string;
+    password: string;
+    selfieUrl: string;
+    gpsLat?: number;
+    gpsLng?: number;
+    gpsLabel?: string;
+  }) => Promise<{ ok: boolean; error?: string }>;
+  logout: () => void;
+  // Super Admin & Public Trial Registration
+  registerCompany: (input: {
+    name: string;
+    place: string;
+    phone: string;
+    planYears: number;
+    planStatus: PlanStatus;
+    adminEmail: string;
+    adminPassword: string;
+  }) => Promise<{ ok: boolean; company?: CompanyRecord; error?: string }>;
+  updateCompany: (companyId: string, updates: Partial<CompanyRecord>) => Promise<void>;
+  extendCompanyPlanYear: (companyId: string) => Promise<void>;
+  setCompanyPlanStatus: (companyId: string, status: PlanStatus) => Promise<void>;
+  toggleCompanyActive: (companyId: string) => Promise<void>;
+  deleteCompany: (companyId: string) => Promise<void>;
+  updateSuperAdminPassword: (newPassword: string, newEmail?: string) => Promise<void>;
+  // Company Scoped Operations
+  addStaff: (
+    input: Omit<StaffMember, 'id' | 'createdAt' | 'active'>,
+    companyIdOverride?: string
+  ) => Promise<StaffMember | null>;
+  updateStaff: (
+    staffId: string,
+    updates: Partial<StaffMember>,
+    companyIdOverride?: string
+  ) => Promise<void>;
+  toggleStaffActive: (staffId: string, companyIdOverride?: string) => Promise<void>;
+  recordAdvanceOrSettlement: (
+    input: {
+      staffId: string;
+      amount: number;
+      date: string;
+      time: string;
+      dueDate: string;
+      mode: PaymentMode;
+      kind: 'advance' | 'settlement';
+      note: string;
+      utr?: string;
+      screenshotUrl?: string;
+    },
+    companyIdOverride?: string
+  ) => Promise<void>;
+  confirmStaffPayment: (paymentId: string, staffNote?: string) => Promise<void>;
+  reportStaffPaymentIssue: (paymentId: string, issueReason: string) => Promise<void>;
+  sendDueDateNotification: (staffId: string, customNote?: string) => Promise<void>;
+  // Punch & Attendance
+  addDutyPunchIn: (input: {
+    workTitle: string;
+    date: string;
+    mode: string;
+    fromLocation: string;
+    toLocation: string;
+    workTime: string;
+    departTime: string;
+    arriveTime: string;
+    dutyWage: number;
+    selfieUrl?: string;
+    gpsLat?: number;
+    gpsLng?: number;
+    gpsLabel?: string;
+  }) => Promise<void>;
+  punchOutDuty: (punchId: string) => Promise<void>;
+  updatePunchLog: (punchId: string, updates: Partial<PunchLogRecord>) => Promise<void>;
+  // Live Instructions
+  sendLiveInstruction: (staffId: string, message: string) => Promise<void>;
+  acknowledgeInstruction: (instructionId: string) => Promise<void>;
+  // Customers
+  addCustomer: (input: Omit<CustomerRecord, 'id' | 'createdAt'>) => Promise<void>;
+  updateCustomer: (customerId: string, updates: Partial<CustomerRecord>) => Promise<void>;
+  collectCustomerDue: (
+    customerId: string,
+    amount: number,
+    mode: PaymentMode,
+    note: string
+  ) => Promise<void>;
+  deleteCustomer: (customerId: string) => Promise<void>;
+  // Multi-Crew Works
+  addWork: (input: Omit<MultiCrewWork, 'id' | 'createdAt'>) => Promise<void>;
+  updateWork: (workId: string, updates: Partial<MultiCrewWork>) => Promise<void>;
+  deleteWork: (workId: string) => Promise<void>;
+  // Subcontracts
+  addSubcontract: (input: Omit<SubcontractRecord, 'id' | 'createdAt'>) => Promise<void>;
+  updateSubcontract: (subId: string, updates: Partial<SubcontractRecord>) => Promise<void>;
+  deleteSubcontract: (subId: string) => Promise<void>;
+  // Expenses
+  submitStaffExpense: (input: {
+    description: string;
+    amount: number;
+    date: string;
+    billPhotoUrl?: string;
+  }) => Promise<void>;
+  reviewExpense: (expenseId: string, status: 'approved' | 'rejected') => Promise<void>;
+  // Manual P&L Ledger
+  addManualLedger: (input: Omit<ManualLedgerEntry, 'id' | 'createdAt'>) => Promise<void>;
+  deleteManualLedger: (entryId: string) => Promise<void>;
+  // Notifications
+  markAllNotificationsRead: () => Promise<void>;
+  clearNotifications: () => Promise<void>;
+}
+
+const StaffOnlineContext = createContext<StaffOnlineContextValue | null>(null);
+
+function loadStoredSession(): AuthSession | null {
+  try {
+    const raw = window.sessionStorage.getItem(SESSION_KEY) || window.localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AuthSession;
+    return parsed && parsed.role ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStoredSession(session: AuthSession | null): void {
+  try {
+    if (!session) {
+      window.sessionStorage.removeItem(SESSION_KEY);
+      window.localStorage.removeItem(SESSION_KEY);
+      return;
+    }
+    const serialized = JSON.stringify(session);
+    window.sessionStorage.setItem(SESSION_KEY, serialized);
+    window.localStorage.setItem(SESSION_KEY, serialized);
+  } catch {
+    // ignore
+  }
+}
+
+function loadStoredLang(): Language {
+  try {
+    const v = window.localStorage.getItem(LANG_KEY);
+    return v === 'ml' ? 'ml' : 'en';
+  } catch {
+    return 'en';
+  }
+}
+
+export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [isReady, setIsReady] = useState(false);
+  const [root, setRoot] = useState<StaffOnlineRootState>({
+    superAdmin: DEFAULT_SUPER_ADMIN,
+    companies: {},
+    companyData: {},
+  });
+  const [session, setSession] = useState<AuthSession | null>(() => loadStoredSession());
+  const [inspectingCompanyId, setInspectingCompanyId] = useState<string | null>(null);
+  const [lang, setLangState] = useState<Language>(() => loadStoredLang());
+
+  // Overlays
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [gpayModal, setGPayModal] = useState<GPayModalPayload | null>(null);
+  const [whatsappModal, setWhatsappModal] = useState<WhatsAppModalPayload | null>(null);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsub = subscribeStaffOnlineRoot((nextState) => {
+      setRoot(nextState);
+      setIsReady(true);
+    });
+    return unsub;
+  }, []);
+
+  const pushToast = useCallback((toast: Omit<ToastMessage, 'id'>) => {
+    const id = uid('toast');
+    setToasts((prev) => [{ ...toast, id }, ...prev].slice(0, 4));
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((item) => item.id !== id));
+    }, 4200);
+  }, []);
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+
+  const setLang = useCallback((next: Language) => {
+    setLangState(next);
+    try {
+      window.localStorage.setItem(LANG_KEY, next);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const toggleLang = useCallback(() => {
+    setLang(lang === 'en' ? 'ml' : 'en');
+  }, [lang, setLang]);
+
+  const companies = useMemo(
+    () =>
+      Object.values(root.companies).sort((a, b) =>
+        (b.createdAt || '').localeCompare(a.createdAt || '')
+      ),
+    [root.companies]
+  );
+
+  const activeCompanyId = useMemo(() => {
+    if (session?.role === 'super_admin') return inspectingCompanyId || null;
+    return session?.companyId || null;
+  }, [session, inspectingCompanyId]);
+
+  const activeCompany = useMemo(
+    () => (activeCompanyId ? root.companies[activeCompanyId] || null : null),
+    [activeCompanyId, root.companies]
+  );
+
+  const activeDb = useMemo(
+    () => (activeCompanyId ? root.companyData[activeCompanyId] || EMPTY_COMPANY_DB : EMPTY_COMPANY_DB),
+    [activeCompanyId, root.companyData]
+  );
+
+  const resolveCompanyId = useCallback(
+    (override?: string): string | null => override || activeCompanyId,
+    [activeCompanyId]
+  );
+
+  const pushNotification = useCallback(
+    async (
+      companyId: string,
+      payload: Omit<AppNotification, 'id' | 'read' | 'createdAt'>
+    ) => {
+      const id = uid('ntf');
+      const item: AppNotification = {
+        ...payload,
+        id,
+        read: false,
+        createdAt: new Date().toISOString(),
+      };
+      await dbSetPath(`staff_online/company_data/${companyId}/notifications/${id}`, item);
+    },
+    []
+  );
+
+  // Auth Handlers
+  const loginSuperAdmin = useCallback(
+    (email: string, password: string) => {
+      const cleanEmail = email.trim().toLowerCase();
+      if (
+        cleanEmail === root.superAdmin.email.trim().toLowerCase() &&
+        password === root.superAdmin.password
+      ) {
+        const nextSession: AuthSession = {
+          role: 'super_admin',
+          name: 'Super Administrator',
+          email: root.superAdmin.email,
+        };
+        setSession(nextSession);
+        saveStoredSession(nextSession);
+        pushToast({ type: 'success', title: 'Signed in to Super Admin Console' });
+        return { ok: true };
+      }
+      return { ok: false, error: 'Invalid Super Admin email or password.' };
+    },
+    [root.superAdmin, pushToast]
+  );
+
+  const loginCompanyAdmin = useCallback(
+    (email: string, password: string, companySlug?: string) => {
+      const cleanEmail = email.trim().toLowerCase();
+      const targetList = companySlug
+        ? companies.filter((c) => c.slug.toLowerCase() === companySlug.toLowerCase())
+        : companies;
+
+      const matched = targetList.find(
+        (c) => c.adminEmail.trim().toLowerCase() === cleanEmail && c.adminPassword === password
+      );
+
+      if (!matched) {
+        return {
+          ok: false,
+          error: companySlug
+            ? 'Invalid Company Admin email or password for this company.'
+            : 'Invalid Company Admin email or password.',
+        };
+      }
+      if (!matched.active) {
+        return {
+          ok: false,
+          error: 'This company account is currently suspended. Please contact Staff. Online support.',
+        };
+      }
+
+      const nextSession: AuthSession = {
+        role: 'company_admin',
+        companyId: matched.id,
+        name: `${matched.name} Admin`,
+        email: matched.adminEmail,
+      };
+      setSession(nextSession);
+      saveStoredSession(nextSession);
+      pushToast({ type: 'success', title: `Welcome to ${matched.name}` });
+      return { ok: true, company: matched };
+    },
+    [companies, pushToast]
+  );
+
+  const loginStaffWithSelfie = useCallback(
+    async (params: {
+      companyId: string;
+      identifier: string;
+      password: string;
+      selfieUrl: string;
+      gpsLat?: number;
+      gpsLng?: number;
+      gpsLabel?: string;
+    }) => {
+      const company = root.companies[params.companyId];
+      if (!company) {
+        return { ok: false, error: 'Selected company was not found.' };
+      }
+      if (!company.active) {
+        return { ok: false, error: 'This company account is suspended.' };
+      }
+      if (!params.selfieUrl) {
+        return { ok: false, error: 'Live front-camera selfie capture is mandatory before login.' };
+      }
+
+      const db = root.companyData[company.id] || EMPTY_COMPANY_DB;
+      const ident = params.identifier.trim().toLowerCase();
+      const cleanDigits = ident.replace(/[^0-9]/g, '');
+
+      const matchedStaff = db.staff.find((s) => {
+        const emailMatch = s.email.trim().toLowerCase() === ident;
+        const phoneDigits = s.phone.replace(/[^0-9]/g, '');
+        const phoneMatch =
+          Boolean(cleanDigits) &&
+          (phoneDigits === cleanDigits || phoneDigits.endsWith(cleanDigits));
+        const idMatch = s.id === params.identifier;
+        return (emailMatch || phoneMatch || idMatch) && s.password === params.password;
+      });
+
+      if (!matchedStaff) {
+        return { ok: false, error: 'Invalid staff email/phone or password.' };
+      }
+      if (!matchedStaff.active) {
+        return { ok: false, error: 'Your staff account is currently disabled by Company Admin.' };
+      }
+
+      const nowIso = new Date().toISOString();
+      const todayIso = getTodayISO();
+      const currentHHMM = getCurrentTimeHHMM();
+      const punchId = uid('punch');
+
+      const loginPunch: PunchLogRecord = {
+        id: punchId,
+        staffId: matchedStaff.id,
+        staffName: matchedStaff.name,
+        staffRole: matchedStaff.role,
+        type: 'login_selfie',
+        workTitle: 'Live Selfie Login Check-In',
+        date: todayIso,
+        mode: 'Live Selfie Check-In',
+        fromLocation: company.place || 'Field',
+        toLocation: company.place || 'Field',
+        workTime: currentHHMM,
+        departTime: currentHHMM,
+        arriveTime: currentHHMM,
+        punchInTime: nowIso,
+        punchOutTime: nowIso,
+        status: 'completed',
+        dutyWage: 0,
+        selfieUrl: params.selfieUrl,
+        gpsLat: params.gpsLat,
+        gpsLng: params.gpsLng,
+        gpsLabel: params.gpsLabel || 'GPS Captured',
+        createdAt: nowIso,
+      };
+
+      await dbSetPath(
+        `staff_online/company_data/${company.id}/punchLogs/${punchId}`,
+        loginPunch
+      );
+      await pushNotification(company.id, {
+        targetRole: 'company_admin',
+        title: `Live Selfie Check-In: ${matchedStaff.name}`,
+        message: `${matchedStaff.name} (${matchedStaff.role}) verified live selfie login at ${currentHHMM}.`,
+        category: 'punch',
+      });
+
+      const nextSession: AuthSession = {
+        role: 'staff',
+        companyId: company.id,
+        staffId: matchedStaff.id,
+        name: matchedStaff.name,
+        email: matchedStaff.email,
+        verifiedSelfieUrl: params.selfieUrl,
+        verifiedAt: nowIso,
+      };
+      setSession(nextSession);
+      saveStoredSession(nextSession);
+      pushToast({
+        type: 'success',
+        title: `Live Selfie Verified — Welcome, ${matchedStaff.name}`,
+      });
+      return { ok: true };
+    },
+    [root.companies, root.companyData, pushNotification, pushToast]
+  );
+
+  const logout = useCallback(() => {
+    setSession(null);
+    setInspectingCompanyId(null);
+    saveStoredSession(null);
+    pushToast({ type: 'info', title: 'Signed out cleanly' });
+  }, [pushToast]);
+
+  // Company Registration & Management
+  const registerCompany = useCallback(
+    async (input: {
+      name: string;
+      place: string;
+      phone: string;
+      planYears: number;
+      planStatus: PlanStatus;
+      adminEmail: string;
+      adminPassword: string;
+    }) => {
+      const cleanName = input.name.trim();
+      const cleanEmail = input.adminEmail.trim().toLowerCase();
+      if (!cleanName || !cleanEmail || !input.adminPassword.trim()) {
+        return { ok: false, error: 'Company Name, Admin Email, and Password are required.' };
+      }
+
+      const duplicateEmail = companies.find(
+        (c) => c.adminEmail.trim().toLowerCase() === cleanEmail
+      );
+      if (duplicateEmail) {
+        return {
+          ok: false,
+          error: 'A company is already registered with this Admin Email.',
+        };
+      }
+
+      const baseSlug = slugifyCompany(cleanName);
+      let finalSlug = baseSlug;
+      let counter = 2;
+      while (companies.some((c) => c.slug === finalSlug)) {
+        finalSlug = `${baseSlug}-${counter}`;
+        counter += 1;
+      }
+
+      const today = getTodayISO();
+      const years = Math.max(1, Number(input.planYears) || 1);
+      const planEndDate =
+        input.planStatus === 'trial' ? addDaysISO(today, 30) : addYearsISO(today, years);
+
+      const id = uid('comp');
+      const record: CompanyRecord = {
+        id,
+        name: cleanName,
+        slug: finalSlug,
+        place: input.place.trim(),
+        phone: input.phone.trim(),
+        adminEmail: cleanEmail,
+        adminPassword: input.adminPassword.trim(),
+        planYears: years,
+        planStatus: input.planStatus,
+        planRatePerYear: 1000,
+        planStartDate: today,
+        planEndDate,
+        active: true,
+        createdAt: new Date().toISOString(),
+      };
+
+      await dbSetPath(`staff_online/companies/${id}`, record);
+      pushToast({
+        type: 'success',
+        title: `${cleanName} registered successfully`,
+      });
+      return { ok: true, company: record };
+    },
+    [companies, pushToast]
+  );
+
+  const updateCompany = useCallback(
+    async (companyId: string, updates: Partial<CompanyRecord>) => {
+      await dbUpdatePath(
+        `staff_online/companies/${companyId}`,
+        updates as Record<string, unknown>
+      );
+      pushToast({ type: 'success', title: 'Company details updated' });
+    },
+    [pushToast]
+  );
+
+  const extendCompanyPlanYear = useCallback(
+    async (companyId: string) => {
+      const comp = root.companies[companyId];
+      if (!comp) return;
+      const baseEnd = comp.planEndDate > getTodayISO() ? comp.planEndDate : getTodayISO();
+      await dbUpdatePath(`staff_online/companies/${companyId}`, {
+        planYears: (comp.planYears || 1) + 1,
+        planStatus: 'annual',
+        planEndDate: addYearsISO(baseEnd, 1),
+      });
+      pushToast({ type: 'success', title: 'Plan extended by +1 Year' });
+    },
+    [root.companies, pushToast]
+  );
+
+  const setCompanyPlanStatus = useCallback(
+    async (companyId: string, status: PlanStatus) => {
+      const comp = root.companies[companyId];
+      if (!comp) return;
+      const today = getTodayISO();
+      const planEndDate =
+        status === 'trial'
+          ? addDaysISO(today, 30)
+          : addYearsISO(today, Math.max(1, comp.planYears || 1));
+      await dbUpdatePath(`staff_online/companies/${companyId}`, {
+        planStatus: status,
+        planStartDate: today,
+        planEndDate,
+      });
+      pushToast({
+        type: 'success',
+        title:
+          status === 'trial'
+            ? '30-Day Free Trial (₹0) Activated'
+            : '₹1,000 / Year Annual Plan Activated',
+      });
+    },
+    [root.companies, pushToast]
+  );
+
+  const toggleCompanyActive = useCallback(
+    async (companyId: string) => {
+      const comp = root.companies[companyId];
+      if (!comp) return;
+      const next = !comp.active;
+      await dbUpdatePath(`staff_online/companies/${companyId}`, { active: next });
+      pushToast({
+        type: next ? 'success' : 'warning',
+        title: next ? `${comp.name} activated` : `${comp.name} suspended`,
+      });
+    },
+    [root.companies, pushToast]
+  );
+
+  const deleteCompany = useCallback(
+    async (companyId: string) => {
+      const comp = root.companies[companyId];
+      await dbRemovePath(`staff_online/companies/${companyId}`);
+      await dbRemovePath(`staff_online/company_data/${companyId}`);
+      if (inspectingCompanyId === companyId) setInspectingCompanyId(null);
+      pushToast({
+        type: 'info',
+        title: `${comp?.name || 'Company'} permanently deleted`,
+      });
+    },
+    [root.companies, inspectingCompanyId, pushToast]
+  );
+
+  const updateSuperAdminPassword = useCallback(
+    async (newPassword: string, newEmail?: string) => {
+      const next: SuperAdminConfig = {
+        email: (newEmail || root.superAdmin.email).trim().toLowerCase(),
+        password: newPassword.trim(),
+        updatedAt: new Date().toISOString(),
+      };
+      await dbSetPath('staff_online/super_admin', next);
+      pushToast({ type: 'success', title: 'Super Admin credentials updated' });
+    },
+    [root.superAdmin.email, pushToast]
+  );
+
+  // Staff CRUD
+  const addStaff = useCallback(
+    async (
+      input: Omit<StaffMember, 'id' | 'createdAt' | 'active'>,
+      companyIdOverride?: string
+    ) => {
+      const cid = resolveCompanyId(companyIdOverride);
+      if (!cid) return null;
+      const id = uid('stf');
+      const staff: StaffMember = {
+        ...input,
+        id,
+        email: input.email.trim().toLowerCase(),
+        active: true,
+        createdAt: new Date().toISOString(),
+      };
+      await dbSetPath(`staff_online/company_data/${cid}/staff/${id}`, staff);
+      pushToast({ type: 'success', title: `Staff added: ${staff.name}` });
+      return staff;
+    },
+    [resolveCompanyId, pushToast]
+  );
+
+  const updateStaff = useCallback(
+    async (
+      staffId: string,
+      updates: Partial<StaffMember>,
+      companyIdOverride?: string
+    ) => {
+      const cid = resolveCompanyId(companyIdOverride);
+      if (!cid) return;
+      await dbUpdatePath(
+        `staff_online/company_data/${cid}/staff/${staffId}`,
+        updates as Record<string, unknown>
+      );
+      pushToast({ type: 'success', title: 'Staff account updated' });
+    },
+    [resolveCompanyId, pushToast]
+  );
+
+  const toggleStaffActive = useCallback(
+    async (staffId: string, companyIdOverride?: string) => {
+      const cid = resolveCompanyId(companyIdOverride);
+      if (!cid) return;
+      const db = root.companyData[cid] || EMPTY_COMPANY_DB;
+      const target = db.staff.find((s) => s.id === staffId);
+      if (!target) return;
+      const next = !target.active;
+      await dbUpdatePath(`staff_online/company_data/${cid}/staff/${staffId}`, { active: next });
+      pushToast({
+        type: next ? 'success' : 'warning',
+        title: `${target.name} ${next ? 'enabled' : 'disabled'}`,
+      });
+    },
+    [resolveCompanyId, root.companyData, pushToast]
+  );
+
+  // Advances & Google Pay Settlements
+  const recordAdvanceOrSettlement = useCallback(
+    async (
+      input: {
+        staffId: string;
+        amount: number;
+        date: string;
+        time: string;
+        dueDate: string;
+        mode: PaymentMode;
+        kind: 'advance' | 'settlement';
+        note: string;
+        utr?: string;
+        screenshotUrl?: string;
+      },
+      companyIdOverride?: string
+    ) => {
+      const cid = resolveCompanyId(companyIdOverride);
+      if (!cid) return;
+      const db = root.companyData[cid] || EMPTY_COMPANY_DB;
+      const staff = db.staff.find((s) => s.id === input.staffId);
+      if (!staff) return;
+
+      const id = uid('adv');
+      const record: AdvancePaymentRecord = {
+        id,
+        staffId: staff.id,
+        staffName: staff.name,
+        amount: Math.max(0, Number(input.amount) || 0),
+        date: input.date || getTodayISO(),
+        time: input.time || getCurrentTimeHHMM(),
+        dueDate: input.dueDate || staff.periodTo || getTodayISO(),
+        mode: input.mode,
+        kind: input.kind,
+        note: input.note.trim(),
+        utr: input.utr?.trim() || undefined,
+        screenshotUrl: input.screenshotUrl || undefined,
+        confirmationStatus: 'pending',
+        createdAt: new Date().toISOString(),
+      };
+
+      await dbSetPath(`staff_online/company_data/${cid}/advances/${id}`, record);
+      await pushNotification(cid, {
+        targetRole: 'staff',
+        targetStaffId: staff.id,
+        title:
+          input.kind === 'settlement'
+            ? `Google Pay Settlement Sent: ${formatINR(record.amount)}`
+            : `Advance Auto-Deducted: ${formatINR(record.amount)}`,
+        message: `${formatINR(record.amount)} recorded via ${input.mode.toUpperCase()} on ${record.date} at ${record.time}. Please confirm receipt in your Salary Slip.`,
+        category: input.kind === 'settlement' ? 'gpay' : 'advance',
+      });
+      pushToast({
+        type: 'success',
+        title:
+          input.kind === 'settlement'
+            ? `GPay Settlement synced (${formatINR(record.amount)})`
+            : `Advance auto-deducted (${formatINR(record.amount)})`,
+        detail: 'Awaiting staff confirmation',
+      });
+    },
+    [resolveCompanyId, root.companyData, pushNotification, pushToast]
+  );
+
+  const confirmStaffPayment = useCallback(
+    async (paymentId: string, staffNote?: string) => {
+      if (!activeCompanyId) return;
+      const target = activeDb.advances.find((a) => a.id === paymentId);
+      if (!target) return;
+      const nowIso = new Date().toISOString();
+      await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/advances/${paymentId}`, {
+        confirmationStatus: 'confirmed',
+        confirmedAt: nowIso,
+        staffNote: staffNote?.trim() || 'Received and confirmed',
+      });
+      await pushNotification(activeCompanyId, {
+        targetRole: 'company_admin',
+        title: `Payment Confirmed by ${target.staffName}`,
+        message: `${target.staffName} confirmed receipt of ${formatINR(target.amount)} (${target.mode.toUpperCase()}).`,
+        category: 'confirm',
+      });
+      pushToast({
+        type: 'success',
+        title: 'Payment receipt confirmed',
+      });
+    },
+    [activeCompanyId, activeDb.advances, pushNotification, pushToast]
+  );
+
+  const reportStaffPaymentIssue = useCallback(
+    async (paymentId: string, issueReason: string) => {
+      if (!activeCompanyId) return;
+      const target = activeDb.advances.find((a) => a.id === paymentId);
+      if (!target) return;
+      await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/advances/${paymentId}`, {
+        confirmationStatus: 'issue',
+        staffNote: issueReason.trim() || 'Payment not received / discrepancy reported',
+      });
+      await pushNotification(activeCompanyId, {
+        targetRole: 'company_admin',
+        title: `Payment Issue Flagged: ${target.staffName}`,
+        message: `${target.staffName} flagged ${formatINR(target.amount)}: "${issueReason.trim() || 'Not received'}"`,
+        category: 'confirm',
+      });
+      pushToast({
+        type: 'warning',
+        title: 'Issue reported to Company Admin',
+      });
+    },
+    [activeCompanyId, activeDb.advances, pushNotification, pushToast]
+  );
+
+  const sendDueDateNotification = useCallback(
+    async (staffId: string, customNote?: string) => {
+      if (!activeCompanyId) return;
+      const staff = activeDb.staff.find((s) => s.id === staffId);
+      if (!staff) return;
+      await pushNotification(activeCompanyId, {
+        targetRole: 'staff',
+        targetStaffId: staff.id,
+        title: `Salary Due Date Reminder (${staff.periodTo || 'Scheduled'})`,
+        message:
+          customNote?.trim() ||
+          `Salary statement for period ${staff.periodFrom} → ${staff.periodTo} is ready. Check your Formal Salary Slip.`,
+        category: 'due',
+      });
+      pushToast({
+        type: 'success',
+        title: `Due date notification sent to ${staff.name}`,
+      });
+    },
+    [activeCompanyId, activeDb.staff, pushNotification, pushToast]
+  );
+
+  // Duty Punching
+  const addDutyPunchIn = useCallback(
+    async (input: {
+      workTitle: string;
+      date: string;
+      mode: string;
+      fromLocation: string;
+      toLocation: string;
+      workTime: string;
+      departTime: string;
+      arriveTime: string;
+      dutyWage: number;
+      selfieUrl?: string;
+      gpsLat?: number;
+      gpsLng?: number;
+      gpsLabel?: string;
+    }) => {
+      if (!activeCompanyId || !session?.staffId) return;
+      const staff = activeDb.staff.find((s) => s.id === session.staffId);
+      if (!staff) return;
+
+      const id = uid('punch');
+      const nowIso = new Date().toISOString();
+      const record: PunchLogRecord = {
+        id,
+        staffId: staff.id,
+        staffName: staff.name,
+        staffRole: staff.role,
+        type: 'duty_punch',
+        workTitle: input.workTitle.trim() || 'Field Duty',
+        date: input.date || getTodayISO(),
+        mode: input.mode || 'On-Site Duty',
+        fromLocation: input.fromLocation.trim(),
+        toLocation: input.toLocation.trim(),
+        workTime: input.workTime,
+        departTime: input.departTime,
+        arriveTime: input.arriveTime,
+        punchInTime: nowIso,
+        status: 'active',
+        dutyWage: Math.max(0, Number(input.dutyWage) || staff.dutyWage),
+        selfieUrl: input.selfieUrl || session.verifiedSelfieUrl || '',
+        gpsLat: input.gpsLat,
+        gpsLng: input.gpsLng,
+        gpsLabel: input.gpsLabel || 'GPS Captured',
+        createdAt: nowIso,
+      };
+
+      await dbSetPath(`staff_online/company_data/${activeCompanyId}/punchLogs/${id}`, record);
+      await pushNotification(activeCompanyId, {
+        targetRole: 'company_admin',
+        title: `Duty Punch-In: ${staff.name}`,
+        message: `${staff.name} punched in for "${record.workTitle}" (${record.fromLocation || 'Base'} → ${record.toLocation || 'Venue'}) • ${formatINR(record.dutyWage)}`,
+        category: 'punch',
+      });
+      pushToast({ type: 'success', title: 'Duty Punch-In recorded' });
+    },
+    [activeCompanyId, activeDb.staff, session, pushNotification, pushToast]
+  );
+
+  const punchOutDuty = useCallback(
+    async (punchId: string) => {
+      if (!activeCompanyId) return;
+      const nowIso = new Date().toISOString();
+      await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/punchLogs/${punchId}`, {
+        status: 'completed',
+        punchOutTime: nowIso,
+      });
+      pushToast({ type: 'success', title: 'Duty Punch-Out completed' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  const updatePunchLog = useCallback(
+    async (punchId: string, updates: Partial<PunchLogRecord>) => {
+      if (!activeCompanyId) return;
+      await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/punchLogs/${punchId}`, {
+        ...updates,
+        editedAt: new Date().toISOString(),
+      } as Record<string, unknown>);
+      pushToast({ type: 'success', title: 'Punch log updated' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  // Live Instructions
+  const sendLiveInstruction = useCallback(
+    async (staffId: string, message: string) => {
+      if (!activeCompanyId || !message.trim()) return;
+      const staff = activeDb.staff.find((s) => s.id === staffId);
+      if (!staff) return;
+      const id = uid('inst');
+      const item: LiveInstruction = {
+        id,
+        staffId: staff.id,
+        staffName: staff.name,
+        message: message.trim(),
+        acknowledged: false,
+        createdAt: new Date().toISOString(),
+      };
+      await dbSetPath(`staff_online/company_data/${activeCompanyId}/instructions/${id}`, item);
+      await pushNotification(activeCompanyId, {
+        targetRole: 'staff',
+        targetStaffId: staff.id,
+        title: 'New Live Admin Instruction',
+        message: message.trim(),
+        category: 'system',
+      });
+      pushToast({ type: 'success', title: `Instruction sent to ${staff.name}` });
+    },
+    [activeCompanyId, activeDb.staff, pushNotification, pushToast]
+  );
+
+  const acknowledgeInstruction = useCallback(
+    async (instructionId: string) => {
+      if (!activeCompanyId) return;
+      await dbUpdatePath(
+        `staff_online/company_data/${activeCompanyId}/instructions/${instructionId}`,
+        {
+          acknowledged: true,
+          acknowledgedAt: new Date().toISOString(),
+        }
+      );
+      pushToast({ type: 'success', title: 'Instruction acknowledged' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  // Customers
+  const addCustomer = useCallback(
+    async (input: Omit<CustomerRecord, 'id' | 'createdAt'>) => {
+      if (!activeCompanyId) return;
+      const id = uid('cust');
+      const initialPayments =
+        input.received > 0
+          ? [
+              {
+                id: uid('cpay'),
+                amount: input.received,
+                date: input.date || getTodayISO(),
+                mode: input.paymentMode,
+                note: 'Initial payment',
+              },
+            ]
+          : [];
+      const record: CustomerRecord = {
+        ...input,
+        id,
+        payments: input.payments || initialPayments,
+        createdAt: new Date().toISOString(),
+      };
+      await dbSetPath(`staff_online/company_data/${activeCompanyId}/customers/${id}`, record);
+      pushToast({ type: 'success', title: `Customer added: ${record.name}` });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  const updateCustomer = useCallback(
+    async (customerId: string, updates: Partial<CustomerRecord>) => {
+      if (!activeCompanyId) return;
+      await dbUpdatePath(
+        `staff_online/company_data/${activeCompanyId}/customers/${customerId}`,
+        updates as Record<string, unknown>
+      );
+      pushToast({ type: 'success', title: 'Customer updated' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  const collectCustomerDue = useCallback(
+    async (customerId: string, amount: number, mode: PaymentMode, note: string) => {
+      if (!activeCompanyId) return;
+      const cust = activeDb.customers.find((c) => c.id === customerId);
+      if (!cust || amount <= 0) return;
+      const nextReceived = (Number(cust.received) || 0) + amount;
+      const nextPayments = [
+        ...(cust.payments || []),
+        {
+          id: uid('cpay'),
+          amount,
+          date: getTodayISO(),
+          mode,
+          note: note.trim() || 'Due payment collected',
+        },
+      ];
+      await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/customers/${customerId}`, {
+        received: nextReceived,
+        paymentMode: mode,
+        payments: nextPayments,
+      });
+      pushToast({
+        type: 'success',
+        title: `Collected ${formatINR(amount)} from ${cust.name}`,
+      });
+    },
+    [activeCompanyId, activeDb.customers, pushToast]
+  );
+
+  const deleteCustomer = useCallback(
+    async (customerId: string) => {
+      if (!activeCompanyId) return;
+      await dbRemovePath(`staff_online/company_data/${activeCompanyId}/customers/${customerId}`);
+      pushToast({ type: 'info', title: 'Customer record deleted' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  // Multi-Crew Works
+  const addWork = useCallback(
+    async (input: Omit<MultiCrewWork, 'id' | 'createdAt'>) => {
+      if (!activeCompanyId) return;
+      const id = uid('wrk');
+      const record: MultiCrewWork = {
+        ...input,
+        id,
+        createdAt: new Date().toISOString(),
+      };
+      await dbSetPath(`staff_online/company_data/${activeCompanyId}/works/${id}`, record);
+      for (const sid of record.assignedStaffIds) {
+        await pushNotification(activeCompanyId, {
+          targetRole: 'staff',
+          targetStaffId: sid,
+          title: `New Duty Assigned: ${record.title}`,
+          message: `${record.clientVenue} on ${record.date} at ${record.time} (${record.fromLocation} → ${record.toLocation})`,
+          category: 'system',
+        });
+      }
+      pushToast({ type: 'success', title: `Work assigned: ${record.title}` });
+    },
+    [activeCompanyId, pushNotification, pushToast]
+  );
+
+  const updateWork = useCallback(
+    async (workId: string, updates: Partial<MultiCrewWork>) => {
+      if (!activeCompanyId) return;
+      await dbUpdatePath(
+        `staff_online/company_data/${activeCompanyId}/works/${workId}`,
+        updates as Record<string, unknown>
+      );
+      pushToast({ type: 'success', title: 'Work updated' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  const deleteWork = useCallback(
+    async (workId: string) => {
+      if (!activeCompanyId) return;
+      await dbRemovePath(`staff_online/company_data/${activeCompanyId}/works/${workId}`);
+      pushToast({ type: 'info', title: 'Work removed' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  // Subcontracts
+  const addSubcontract = useCallback(
+    async (input: Omit<SubcontractRecord, 'id' | 'createdAt'>) => {
+      if (!activeCompanyId) return;
+      const id = uid('sub');
+      const record: SubcontractRecord = {
+        ...input,
+        id,
+        createdAt: new Date().toISOString(),
+      };
+      await dbSetPath(`staff_online/company_data/${activeCompanyId}/subcontracts/${id}`, record);
+      pushToast({ type: 'success', title: `Subcontract saved: ${record.vendorName}` });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  const updateSubcontract = useCallback(
+    async (subId: string, updates: Partial<SubcontractRecord>) => {
+      if (!activeCompanyId) return;
+      await dbUpdatePath(
+        `staff_online/company_data/${activeCompanyId}/subcontracts/${subId}`,
+        updates as Record<string, unknown>
+      );
+      pushToast({ type: 'success', title: 'Subcontract updated' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  const deleteSubcontract = useCallback(
+    async (subId: string) => {
+      if (!activeCompanyId) return;
+      await dbRemovePath(`staff_online/company_data/${activeCompanyId}/subcontracts/${subId}`);
+      pushToast({ type: 'info', title: 'Subcontract deleted' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  // Expenses
+  const submitStaffExpense = useCallback(
+    async (input: {
+      description: string;
+      amount: number;
+      date: string;
+      billPhotoUrl?: string;
+    }) => {
+      if (!activeCompanyId || !session?.staffId) return;
+      const staff = activeDb.staff.find((s) => s.id === session.staffId);
+      if (!staff) return;
+      const id = uid('exp');
+      const record: ExpenseRecord = {
+        id,
+        staffId: staff.id,
+        staffName: staff.name,
+        description: input.description.trim(),
+        amount: Math.max(0, Number(input.amount) || 0),
+        date: input.date || getTodayISO(),
+        billPhotoUrl: input.billPhotoUrl,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+      };
+      await dbSetPath(`staff_online/company_data/${activeCompanyId}/expenses/${id}`, record);
+      await pushNotification(activeCompanyId, {
+        targetRole: 'company_admin',
+        title: `New Expense Claim: ${staff.name}`,
+        message: `${staff.name} submitted ${formatINR(record.amount)} for "${record.description}".`,
+        category: 'expense',
+      });
+      pushToast({ type: 'success', title: 'Expense claim submitted for approval' });
+    },
+    [activeCompanyId, activeDb.staff, session, pushNotification, pushToast]
+  );
+
+  const reviewExpense = useCallback(
+    async (expenseId: string, status: 'approved' | 'rejected') => {
+      if (!activeCompanyId) return;
+      const exp = activeDb.expenses.find((e) => e.id === expenseId);
+      if (!exp) return;
+      await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/expenses/${expenseId}`, {
+        status,
+        reviewedAt: new Date().toISOString(),
+      });
+      await pushNotification(activeCompanyId, {
+        targetRole: 'staff',
+        targetStaffId: exp.staffId,
+        title:
+          status === 'approved'
+            ? `Expense Approved: ${formatINR(exp.amount)}`
+            : `Expense Rejected: ${formatINR(exp.amount)}`,
+        message:
+          status === 'approved'
+            ? `"${exp.description}" (${formatINR(exp.amount)}) has been approved and added to your Salary Slip.`
+            : `"${exp.description}" (${formatINR(exp.amount)}) was not approved.`,
+        category: 'expense',
+      });
+      pushToast({
+        type: status === 'approved' ? 'success' : 'info',
+        title:
+          status === 'approved'
+            ? 'Expense approved & added to Salary Slip'
+            : 'Expense rejected',
+      });
+    },
+    [activeCompanyId, activeDb.expenses, pushNotification, pushToast]
+  );
+
+  // Manual Ledger
+  const addManualLedger = useCallback(
+    async (input: Omit<ManualLedgerEntry, 'id' | 'createdAt'>) => {
+      if (!activeCompanyId) return;
+      const id = uid('ldg');
+      const record: ManualLedgerEntry = {
+        ...input,
+        id,
+        createdAt: new Date().toISOString(),
+      };
+      await dbSetPath(`staff_online/company_data/${activeCompanyId}/ledger/${id}`, record);
+      pushToast({ type: 'success', title: 'Ledger entry added' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  const deleteManualLedger = useCallback(
+    async (entryId: string) => {
+      if (!activeCompanyId) return;
+      await dbRemovePath(`staff_online/company_data/${activeCompanyId}/ledger/${entryId}`);
+      pushToast({ type: 'info', title: 'Ledger entry removed' });
+    },
+    [activeCompanyId, pushToast]
+  );
+
+  // Notifications
+  const markAllNotificationsRead = useCallback(async () => {
+    if (!activeCompanyId) return;
+    const updates: Record<string, unknown> = {};
+    activeDb.notifications.forEach((n) => {
+      if (!n.read) updates[`${n.id}/read`] = true;
+    });
+    if (Object.keys(updates).length > 0) {
+      await dbUpdatePath(`staff_online/company_data/${activeCompanyId}/notifications`, updates);
+    }
+  }, [activeCompanyId, activeDb.notifications]);
+
+  const clearNotifications = useCallback(async () => {
+    if (!activeCompanyId) return;
+    await dbRemovePath(`staff_online/company_data/${activeCompanyId}/notifications`);
+    pushToast({ type: 'info', title: 'Notifications cleared' });
+  }, [activeCompanyId, pushToast]);
+
+  const value: StaffOnlineContextValue = {
+    isReady,
+    superAdmin: root.superAdmin,
+    companies,
+    companiesMap: root.companies,
+    companyDataMap: root.companyData,
+    session,
+    inspectingCompanyId,
+    setInspectingCompanyId,
+    activeCompany,
+    activeDb,
+    lang,
+    toggleLang,
+    setLang,
+    toasts,
+    pushToast,
+    dismissToast,
+    notificationsOpen,
+    setNotificationsOpen,
+    gpayModal,
+    openGPayModal: setGPayModal,
+    closeGPayModal: () => setGPayModal(null),
+    whatsappModal,
+    openWhatsAppModal: setWhatsappModal,
+    closeWhatsAppModal: () => setWhatsappModal(null),
+    lightboxUrl,
+    openLightbox: setLightboxUrl,
+    closeLightbox: () => setLightboxUrl(null),
+    loginSuperAdmin,
+    loginCompanyAdmin,
+    loginStaffWithSelfie,
+    logout,
+    registerCompany,
+    updateCompany,
+    extendCompanyPlanYear,
+    setCompanyPlanStatus,
+    toggleCompanyActive,
+    deleteCompany,
+    updateSuperAdminPassword,
+    addStaff,
+    updateStaff,
+    toggleStaffActive,
+    recordAdvanceOrSettlement,
+    confirmStaffPayment,
+    reportStaffPaymentIssue,
+    sendDueDateNotification,
+    addDutyPunchIn,
+    punchOutDuty,
+    updatePunchLog,
+    sendLiveInstruction,
+    acknowledgeInstruction,
+    addCustomer,
+    updateCustomer,
+    collectCustomerDue,
+    deleteCustomer,
+    addWork,
+    updateWork,
+    deleteWork,
+    addSubcontract,
+    updateSubcontract,
+    deleteSubcontract,
+    submitStaffExpense,
+    reviewExpense,
+    addManualLedger,
+    deleteManualLedger,
+    markAllNotificationsRead,
+    clearNotifications,
+  };
+
+  return <StaffOnlineContext.Provider value={value}>{children}</StaffOnlineContext.Provider>;
+};
+
+export function useStaffOnline(): StaffOnlineContextValue {
+  const ctx = useContext(StaffOnlineContext);
+  if (!ctx) throw new Error('useStaffOnline must be used within StaffOnlineProvider');
+  return ctx;
+}

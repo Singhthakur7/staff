@@ -1,54 +1,76 @@
 @import "tailwindcss";
 
-@theme {
-  --font-sans: "Inter", "Noto Sans Malayalam", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
 @layer base {
+  :root {
+    --font-display: 'Plus Jakarta Sans', 'Inter', 'Noto Sans Malayalam', system-ui, sans-serif;
+    --font-sans: 'Inter', 'Noto Sans Malayalam', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+
   html {
     font-family: var(--font-sans);
+    scroll-behavior: smooth;
     -webkit-tap-highlight-color: transparent;
   }
 
-  body {
-    background-color: #F4F7FB;
-    color: #0B1120;
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  input, select, textarea, button {
+    font-family: inherit;
   }
 }
 
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
+.paper-sheet {
+  box-shadow: 0 12px 32px -8px rgba(15, 23, 42, 0.12), 0 2px 6px -1px rgba(15, 23, 42, 0.06);
 }
 
-.pb-safe {
-  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
-}
-
-/* Custom refined scrollbar for dense ERP panels */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.45);
-  border-radius: 9999px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.7);
+.card-elevated {
+  box-shadow: 0 2px 12px -3px rgba(15, 23, 42, 0.06), 0 1px 2px 0 rgba(15, 23, 42, 0.03);
 }
 
 @media print {
-  body {
-    background: #FFFFFF !important;
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
   }
+
+  html, body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
   .no-print {
     display: none !important;
+  }
+
+  .print-only-container {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .print-page-break {
+    page-break-after: always;
+    break-after: page;
   }
 }
