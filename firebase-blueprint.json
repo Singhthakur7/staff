@@ -1,433 +1,262 @@
 {
   "entities": {
-    "AdminUser": {
-      "title": "AdminUser",
-      "description": "Authorized Master Admin user document keyed by Firebase Auth UID.",
+    "SuperAdminConfig": {
+      "title": "SuperAdminConfig",
+      "description": "Platform super administrator login credentials and update timestamp.",
       "type": "object",
       "properties": {
-        "email": { "type": "string", "format": "email", "maxLength": 160 },
-        "displayName": { "type": "string", "maxLength": 120 },
-        "role": { "type": "string", "enum": ["master_admin"] },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "email": { "type": "string" },
+        "password": { "type": "string" },
+        "updatedAt": { "type": "string" }
       },
-      "required": ["email", "role", "createdAt", "updatedAt"]
+      "required": ["email", "password", "updatedAt"]
     },
-    "MasterConfig": {
-      "title": "MasterConfig",
-      "description": "Global multi-tenant SaaS branding and support settings.",
+    "CompanyRecord": {
+      "title": "CompanyRecord",
+      "description": "Registered tenant company workspace profile, plan status, and admin credentials.",
       "type": "object",
       "properties": {
-        "brandName": { "type": "string", "minLength": 2, "maxLength": 120 },
-        "supportEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["brandName", "supportEmail", "createdByUid", "createdAt", "updatedAt"]
-    },
-    "CompanyProfile": {
-      "title": "CompanyProfile",
-      "description": "Isolated tenant company profile and dynamic branding metadata.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "name": { "type": "string", "minLength": 2, "maxLength": 160 },
-        "slug": { "type": "string", "minLength": 2, "maxLength": 80, "pattern": "^[a-z0-9\\-]+$" },
-        "tagline": { "type": "string", "maxLength": 200 },
-        "address": { "type": "string", "maxLength": 300 },
-        "phone": { "type": "string", "maxLength": 40 },
-        "upi": { "type": "string", "maxLength": 120 },
-        "badge": { "type": "string", "maxLength": 10 },
-        "adminEmail": { "type": "string", "format": "email", "maxLength": 160 },
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "slug": { "type": "string" },
+        "place": { "type": "string" },
+        "phone": { "type": "string" },
+        "adminEmail": { "type": "string" },
+        "adminPassword": { "type": "string" },
+        "planYears": { "type": "number" },
+        "planStatus": { "type": "string", "enum": ["trial", "annual"] },
+        "planRatePerYear": { "type": "number" },
+        "planStartDate": { "type": "string" },
+        "planEndDate": { "type": "string" },
         "active": { "type": "boolean" },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "name", "slug", "adminEmail", "active", "createdByUid", "createdAt", "updatedAt"]
+      "required": ["id", "name", "slug", "adminEmail", "adminPassword", "planStatus", "active", "createdAt"]
     },
-    "TenantMembership": {
-      "title": "TenantMembership",
-      "description": "Email-indexed tenant membership lookup for isolated Company Admin and Staff login routing.",
+    "StaffMember": {
+      "title": "StaffMember",
+      "description": "Company staff member profile, wage, UPI, and login credentials.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companySlug": { "type": "string", "maxLength": 80, "pattern": "^[a-z0-9\\-]+$" },
-        "companyName": { "type": "string", "maxLength": 160 },
-        "companyActive": { "type": "boolean" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "email": { "type": "string", "format": "email", "maxLength": 160 },
-        "role": { "type": "string", "enum": ["company_admin", "staff"] },
-        "staffId": { "type": "string", "maxLength": 128 },
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "dutyWage": { "type": "number" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "password": { "type": "string" },
+        "upiId": { "type": "string" },
+        "periodFrom": { "type": "string" },
+        "periodTo": { "type": "string" },
         "active": { "type": "boolean" },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "companyId", "companySlug", "companyName", "companyActive", "companyAdminEmail", "email", "role", "active", "createdByUid", "createdAt", "updatedAt"]
+      "required": ["id", "name", "role", "dutyWage", "email", "password", "active", "createdAt"]
     },
-    "CompanyMember": {
-      "title": "CompanyMember",
-      "description": "Subcollection membership record under a company used by the Master Gate security rule.",
+    "AdvancePaymentRecord": {
+      "title": "AdvancePaymentRecord",
+      "description": "Staff salary advance or Google Pay settlement transaction.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "email": { "type": "string", "format": "email", "maxLength": 160 },
-        "role": { "type": "string", "enum": ["company_admin", "staff"] },
-        "staffId": { "type": "string", "maxLength": 128 },
-        "active": { "type": "boolean" },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "companyId", "email", "role", "active", "createdByUid", "createdAt", "updatedAt"]
-    },
-    "StaffAccount": {
-      "title": "StaffAccount",
-      "description": "Employee profile and payroll parameters isolated inside a company.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
-        "role": { "type": "string", "maxLength": 100 },
-        "phone": { "type": "string", "maxLength": 40 },
-        "email": { "type": "string", "format": "email", "maxLength": 160 },
-        "upiId": { "type": "string", "maxLength": 120 },
-        "dailyWage": { "type": "number" },
-        "salaryDay": { "type": "number" },
-        "emergencyContact": { "type": "string", "maxLength": 120 },
-        "kycLast4": { "type": "string", "maxLength": 8 },
-        "active": { "type": "boolean" },
-        "joinedDate": { "type": "string", "maxLength": 32 },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "companyId", "companyAdminEmail", "name", "role", "email", "dailyWage", "salaryDay", "active", "joinedDate", "createdByUid", "createdAt", "updatedAt"]
-    },
-    "AttendanceRecord": {
-      "title": "AttendanceRecord",
-      "description": "Selfie + GPS attendance shift record and editable travel log.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "staffEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffName": { "type": "string", "maxLength": 120 },
-        "date": { "type": "string", "maxLength": 32 },
-        "punchInTime": { "type": "string", "maxLength": 64 },
-        "punchOutTime": { "type": "string", "maxLength": 64 },
-        "status": { "type": "string", "enum": ["working", "completed"] },
-        "rateMode": { "type": "string", "enum": ["regular", "half", "own_camera", "live_single_cam"] },
-        "wageEarned": { "type": "number" },
-        "studioName": { "type": "string", "maxLength": 160 },
-        "studioPhone": { "type": "string", "maxLength": 40 },
-        "venue": { "type": "string", "maxLength": 240 },
-        "fromLocation": { "type": "string", "maxLength": 160 },
-        "toLocation": { "type": "string", "maxLength": 160 },
-        "workNotes": { "type": "string", "maxLength": 1000 },
-        "gpsLat": { "type": "number" },
-        "gpsLng": { "type": "number" },
-        "gpsLabel": { "type": "string", "maxLength": 200 },
-        "selfieUrl": { "type": "string", "maxLength": 120000 },
-        "lastEditedBy": { "type": "string", "maxLength": 120 },
-        "lastEditedAt": { "type": "string", "maxLength": 64 },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "companyId", "companyAdminEmail", "staffId", "staffEmail", "staffName", "date", "punchInTime", "status", "rateMode", "wageEarned", "createdByUid", "createdAt", "updatedAt"]
-    },
-    "WorkAssignment": {
-      "title": "WorkAssignment",
-      "description": "Date-wise work dispatch, sub-contract tracking, and studio billing.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "date": { "type": "string", "maxLength": 32 },
-        "callTime": { "type": "string", "maxLength": 32 },
-        "workType": { "type": "string", "maxLength": 160 },
-        "eventTitle": { "type": "string", "maxLength": 200 },
-        "venue": { "type": "string", "maxLength": 240 },
-        "studioName": { "type": "string", "maxLength": 160 },
-        "studioWhatsApp": { "type": "string", "maxLength": 40 },
-        "assignedStaffId": { "type": "string", "maxLength": 128 },
-        "assignedStaffEmail": { "type": "string", "maxLength": 160 },
-        "assignedStaffName": { "type": "string", "maxLength": 120 },
-        "rateMode": { "type": "string", "enum": ["regular", "half", "own_camera", "live_single_cam"] },
-        "mapsLink": { "type": "string", "maxLength": 500 },
-        "hasSubContract": { "type": "boolean" },
-        "subContractorName": { "type": "string", "maxLength": 160 },
-        "subContractorWA": { "type": "string", "maxLength": 40 },
-        "subContractTotal": { "type": "number" },
-        "subContractPaid": { "type": "number" },
-        "billTotal": { "type": "number" },
-        "billReceived": { "type": "number" },
-        "gpayUtr": { "type": "string", "maxLength": 100 },
-        "gpayScreenshot": { "type": "string", "maxLength": 120000 },
-        "notes": { "type": "string", "maxLength": 1000 },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "companyId", "companyAdminEmail", "date", "workType", "eventTitle", "venue", "rateMode", "hasSubContract", "billTotal", "billReceived", "createdByUid", "createdAt", "updatedAt"]
-    },
-    "LedgerEntry": {
-      "title": "LedgerEntry",
-      "description": "Manual company income and expense ledger record for P&L.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "type": { "type": "string", "enum": ["income", "expense"] },
-        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
-        "category": { "type": "string", "maxLength": 120 },
+        "id": { "type": "string" },
+        "staffId": { "type": "string" },
+        "staffName": { "type": "string" },
         "amount": { "type": "number" },
-        "date": { "type": "string", "maxLength": 32 },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "companyId", "companyAdminEmail", "type", "title", "category", "amount", "date", "createdByUid", "createdAt", "updatedAt"]
-    },
-    "SalaryPayment": {
-      "title": "SalaryPayment",
-      "description": "Salary or advance payout with 2-way staff receipt confirmation.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "staffEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffName": { "type": "string", "maxLength": 120 },
-        "date": { "type": "string", "maxLength": 32 },
-        "amount": { "type": "number" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "dueDate": { "type": "string" },
         "mode": { "type": "string", "enum": ["gpay", "upi", "bank", "cash"] },
-        "category": { "type": "string", "enum": ["salary", "advance"] },
-        "upiIdUsed": { "type": "string", "maxLength": 120 },
-        "utr": { "type": "string", "maxLength": 100 },
-        "note": { "type": "string", "maxLength": 500 },
-        "screenshotUrl": { "type": "string", "maxLength": 120000 },
+        "kind": { "type": "string", "enum": ["advance", "settlement"] },
+        "note": { "type": "string" },
+        "utr": { "type": "string" },
+        "screenshotUrl": { "type": "string" },
         "confirmationStatus": { "type": "string", "enum": ["pending", "confirmed", "issue"] },
-        "confirmedAt": { "type": "string", "maxLength": 64 },
-        "staffNote": { "type": "string", "maxLength": 400 },
-        "issueReason": { "type": "string", "maxLength": 400 },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "confirmedAt": { "type": "string" },
+        "staffNote": { "type": "string" },
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "companyId", "companyAdminEmail", "staffId", "staffEmail", "staffName", "date", "amount", "mode", "category", "confirmationStatus", "createdByUid", "createdAt", "updatedAt"]
+      "required": ["id", "staffId", "staffName", "amount", "date", "mode", "kind", "confirmationStatus", "createdAt"]
     },
     "CustomerRecord": {
       "title": "CustomerRecord",
-      "description": "Partner studio and client CRM record scoped to a company.",
+      "description": "Client billing, work rate, and received payment record.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "allowedStaffEmails": { "type": "array", "description": "Bounded list (max 100) of active company staff emails allowed to view studio rules." },
-        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
-        "studioName": { "type": "string", "minLength": 1, "maxLength": 160 },
-        "whatsapp": { "type": "string", "maxLength": 40 },
-        "workLocations": { "type": "string", "maxLength": 240 },
-        "workDetails": { "type": "string", "maxLength": 500 },
-        "income": { "type": "number" },
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "companyOrStudio": { "type": "string" },
+        "phone": { "type": "string" },
+        "location": { "type": "string" },
+        "workDetails": { "type": "string" },
+        "workRate": { "type": "number" },
         "expense": { "type": "number" },
         "received": { "type": "number" },
-        "rulesAndTerms": { "type": "string", "maxLength": 1000 },
-        "addedByStaffName": { "type": "string", "maxLength": 120 },
-        "addedByEmail": { "type": "string", "maxLength": 160 },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "rulesTerms": { "type": "string" },
+        "paymentHistory": { "type": "array" },
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "companyId", "companyAdminEmail", "allowedStaffEmails", "name", "studioName", "income", "expense", "received", "createdByUid", "createdAt", "updatedAt"]
+      "required": ["id", "name", "workRate", "received", "createdAt"]
     },
-    "ExpenseClaim": {
-      "title": "ExpenseClaim",
-      "description": "Staff reimbursement claim awaiting Company Admin approval.",
+    "MultiCrewWork": {
+      "title": "MultiCrewWork",
+      "description": "Scheduled multi-crew event or production work assignment.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "staffEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffName": { "type": "string", "maxLength": 120 },
-        "date": { "type": "string", "maxLength": 32 },
-        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "id": { "type": "string" },
+        "eventTitle": { "type": "string" },
+        "date": { "type": "string" },
+        "venue": { "type": "string" },
+        "workType": { "type": "string" },
+        "crewMembers": { "type": "array" },
+        "status": { "type": "string", "enum": ["scheduled", "in_progress", "completed"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "eventTitle", "date", "venue", "status", "createdAt"]
+    },
+    "SubcontractRecord": {
+      "title": "SubcontractRecord",
+      "description": "Third-party vendor subcontract assignment and payout tracker.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "vendorName": { "type": "string" },
+        "workTitle": { "type": "string" },
+        "date": { "type": "string" },
+        "totalRate": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "vendorName", "workTitle", "date", "totalRate", "paidAmount", "createdAt"]
+    },
+    "PunchLogRecord": {
+      "title": "PunchLogRecord",
+      "description": "Staff 3-stage live selfie attendance, route, and GPS punch log.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "staffId": { "type": "string" },
+        "staffName": { "type": "string" },
+        "staffRole": { "type": "string" },
+        "type": { "type": "string", "enum": ["login_selfie", "duty_punch"] },
+        "workTitle": { "type": "string" },
+        "date": { "type": "string" },
+        "punchInTime": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "completed"] },
+        "dutyWage": { "type": "number" },
+        "selfieUrl": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "staffId", "staffName", "type", "date", "punchInTime", "status", "dutyWage", "createdAt"]
+    },
+    "ExpenseRecord": {
+      "title": "ExpenseRecord",
+      "description": "Staff submitted field expense with optional bill photo.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "staffId": { "type": "string" },
+        "staffName": { "type": "string" },
+        "description": { "type": "string" },
         "amount": { "type": "number" },
-        "billPhotoUrl": { "type": "string", "maxLength": 120000 },
+        "date": { "type": "string" },
         "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "companyId", "companyAdminEmail", "staffId", "staffEmail", "staffName", "date", "title", "amount", "status", "createdByUid", "createdAt", "updatedAt"]
-    },
-    "LeaveRequest": {
-      "title": "LeaveRequest",
-      "description": "Staff leave request awaiting Company Admin review.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "staffEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffName": { "type": "string", "maxLength": 120 },
-        "leaveType": { "type": "string", "enum": ["Casual", "Sick", "Emergency"] },
-        "date": { "type": "string", "maxLength": 32 },
-        "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
-        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "companyId", "companyAdminEmail", "staffId", "staffEmail", "staffName", "leaveType", "date", "reason", "status", "createdByUid", "createdAt", "updatedAt"]
-    },
-    "SiteReceipt": {
-      "title": "SiteReceipt",
-      "description": "Field site receipt image uploaded by staff.",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "staffEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffName": { "type": "string", "maxLength": 120 },
-        "date": { "type": "string", "maxLength": 32 },
-        "note": { "type": "string", "maxLength": 400 },
-        "imageUrl": { "type": "string", "maxLength": 120000 },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "companyId", "companyAdminEmail", "staffId", "staffEmail", "staffName", "date", "imageUrl", "createdByUid", "createdAt", "updatedAt"]
+      "required": ["id", "staffId", "staffName", "description", "amount", "date", "status", "createdAt"]
     },
     "LiveInstruction": {
       "title": "LiveInstruction",
-      "description": "Live directive sent by Company Admin to a staff member.",
+      "description": "Real-time dispatch instruction from Company Admin to Staff.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "staffEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "staffName": { "type": "string", "maxLength": 120 },
-        "message": { "type": "string", "minLength": 1, "maxLength": 1000 },
-        "presetTag": { "type": "string", "maxLength": 80 },
+        "id": { "type": "string" },
+        "staffId": { "type": "string" },
+        "staffName": { "type": "string" },
+        "message": { "type": "string" },
         "acknowledged": { "type": "boolean" },
-        "acknowledgedAt": { "type": "string", "maxLength": 64 },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "companyId", "companyAdminEmail", "staffId", "staffEmail", "staffName", "message", "acknowledged", "createdByUid", "createdAt", "updatedAt"]
+      "required": ["id", "staffId", "staffName", "message", "acknowledged", "createdAt"]
     },
-    "AdminNotification": {
-      "title": "AdminNotification",
-      "description": "Activity alert delivered to a company's Admin activity feed.",
+    "AppNotification": {
+      "title": "AppNotification",
+      "description": "Company scoped notification entry for admins or staff.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "companyAdminEmail": { "type": "string", "format": "email", "maxLength": 160 },
-        "type": { "type": "string", "enum": ["login", "punch_in", "punch_out", "attendance_edit", "expense", "leave", "receipt", "customer", "payment_confirmed", "payment_issue", "instruction_ack", "system"] },
-        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
-        "message": { "type": "string", "maxLength": 1000 },
-        "timestamp": { "type": "string", "maxLength": 64 },
+        "id": { "type": "string" },
+        "targetRole": { "type": "string", "enum": ["company_admin", "staff"] },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "category": { "type": "string" },
         "read": { "type": "boolean" },
-        "staffId": { "type": "string", "maxLength": 128 },
-        "gpsLat": { "type": "number" },
-        "gpsLng": { "type": "number" },
-        "imageUrl": { "type": "string", "maxLength": 120000 },
-        "priority": { "type": "string", "enum": ["normal", "high"] },
-        "createdByUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string" }
       },
-      "required": ["id", "companyId", "companyAdminEmail", "type", "title", "message", "timestamp", "read", "createdByUid", "createdAt", "updatedAt"]
+      "required": ["id", "targetRole", "title", "message", "read", "createdAt"]
+    },
+    "ManualLedgerEntry": {
+      "title": "ManualLedgerEntry",
+      "description": "Manual income or expense ledger entry for P&L reporting.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["income", "expense"] },
+        "title": { "type": "string" },
+        "category": { "type": "string" },
+        "amount": { "type": "number" },
+        "date": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "type", "title", "category", "amount", "date", "createdAt"]
     }
   },
   "firestore": {
-    "/admins/{adminId}": {
-      "schema": { "$ref": "#/entities/AdminUser" },
-      "description": "Master Admin UID registry."
+    "/staff_online_config/{configId}": {
+      "schema": { "$ref": "#/entities/SuperAdminConfig" },
+      "description": "Global platform configuration documents (super_admin credentials)."
     },
-    "/system/{configId}": {
-      "schema": { "$ref": "#/entities/MasterConfig" },
-      "description": "Global platform configuration (doc: master_config)."
+    "/staff_online_companies/{companyId}": {
+      "schema": { "$ref": "#/entities/CompanyRecord" },
+      "description": "Registered tenant companies and their subscription status."
     },
-    "/companies/{companyId}": {
-      "schema": { "$ref": "#/entities/CompanyProfile" },
-      "description": "Tenant company directory and branding profiles."
+    "/staff_online_companies/{companyId}/staff/{docId}": {
+      "schema": { "$ref": "#/entities/StaffMember" },
+      "description": "Tenant-isolated staff accounts."
     },
-    "/memberships/{membershipId}": {
-      "schema": { "$ref": "#/entities/TenantMembership" },
-      "description": "Email-scoped membership lookup for Company Admin and Staff portals."
+    "/staff_online_companies/{companyId}/advances/{docId}": {
+      "schema": { "$ref": "#/entities/AdvancePaymentRecord" },
+      "description": "Tenant-isolated salary advances and GPay settlements."
     },
-    "/companies/{companyId}/members/{memberKey}": {
-      "schema": { "$ref": "#/entities/CompanyMember" },
-      "description": "Authoritative company membership subcollection checked by Master Gate."
-    },
-    "/companies/{companyId}/staff/{staffId}": {
-      "schema": { "$ref": "#/entities/StaffAccount" },
-      "description": "Company-isolated employee roster and wage settings."
-    },
-    "/companies/{companyId}/attendance/{attendanceId}": {
-      "schema": { "$ref": "#/entities/AttendanceRecord" },
-      "description": "Company-isolated shift attendance and travel logs."
-    },
-    "/companies/{companyId}/works/{workId}": {
-      "schema": { "$ref": "#/entities/WorkAssignment" },
-      "description": "Company-isolated work schedules, sub-contracts, and billing."
-    },
-    "/companies/{companyId}/ledger/{ledgerId}": {
-      "schema": { "$ref": "#/entities/LedgerEntry" },
-      "description": "Company-isolated manual P&L ledger entries."
-    },
-    "/companies/{companyId}/payments/{paymentId}": {
-      "schema": { "$ref": "#/entities/SalaryPayment" },
-      "description": "Company-isolated salary payouts and 2-way staff confirmations."
-    },
-    "/companies/{companyId}/customers/{customerId}": {
+    "/staff_online_companies/{companyId}/customers/{docId}": {
       "schema": { "$ref": "#/entities/CustomerRecord" },
-      "description": "Company-isolated partner studio and client CRM."
+      "description": "Tenant-isolated customer billing accounts."
     },
-    "/companies/{companyId}/expenses/{expenseId}": {
-      "schema": { "$ref": "#/entities/ExpenseClaim" },
-      "description": "Company-isolated staff expense claims."
+    "/staff_online_companies/{companyId}/works/{docId}": {
+      "schema": { "$ref": "#/entities/MultiCrewWork" },
+      "description": "Tenant-isolated multi-crew event dispatches."
     },
-    "/companies/{companyId}/leaves/{leaveId}": {
-      "schema": { "$ref": "#/entities/LeaveRequest" },
-      "description": "Company-isolated staff leave applications."
+    "/staff_online_companies/{companyId}/subcontracts/{docId}": {
+      "schema": { "$ref": "#/entities/SubcontractRecord" },
+      "description": "Tenant-isolated vendor subcontract records."
     },
-    "/companies/{companyId}/receipts/{receiptId}": {
-      "schema": { "$ref": "#/entities/SiteReceipt" },
-      "description": "Company-isolated site receipt uploads."
+    "/staff_online_companies/{companyId}/punchLogs/{docId}": {
+      "schema": { "$ref": "#/entities/PunchLogRecord" },
+      "description": "Tenant-isolated live selfie & 3-stage site tracking logs."
     },
-    "/companies/{companyId}/instructions/{instructionId}": {
+    "/staff_online_companies/{companyId}/expenses/{docId}": {
+      "schema": { "$ref": "#/entities/ExpenseRecord" },
+      "description": "Tenant-isolated staff expense claims."
+    },
+    "/staff_online_companies/{companyId}/instructions/{docId}": {
       "schema": { "$ref": "#/entities/LiveInstruction" },
-      "description": "Company-isolated live admin-to-staff instructions."
+      "description": "Tenant-isolated admin-to-staff dispatch instructions."
     },
-    "/companies/{companyId}/notifications/{notificationId}": {
-      "schema": { "$ref": "#/entities/AdminNotification" },
-      "description": "Company-isolated admin activity feed notifications."
+    "/staff_online_companies/{companyId}/notifications/{docId}": {
+      "schema": { "$ref": "#/entities/AppNotification" },
+      "description": "Tenant-isolated activity notifications."
+    },
+    "/staff_online_companies/{companyId}/ledger/{docId}": {
+      "schema": { "$ref": "#/entities/ManualLedgerEntry" },
+      "description": "Tenant-isolated manual P&L ledger records."
     }
   }
 }

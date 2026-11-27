@@ -36,7 +36,7 @@ import {
   getDutyStageInfo,
   safeCopyText,
 } from '../utils/helpers';
-import { getSafeOrigin } from '../utils/router';
+import { getSafeOrigin, navigateToPath } from '../utils/router';
 import { BrandLogo } from './BrandLogo';
 
 type OfferStyle = 'annual_offer' | 'studio_selfie' | 'salary_billing';
@@ -67,6 +67,7 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
     companies,
     companyDataMap,
     registerCompany,
+    loginCompanyAdmin,
     submitFrontSelfieStage,
     pushToast,
   } = useStaffOnline();
@@ -164,12 +165,15 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
     const db = companyDataMap[activeCompanyForLogin.id];
     if (!db) return null;
     const ident = staffIdentifier.trim().toLowerCase();
-    const digits = ident.replace(/[^0-9]/g, '');
+    const digits = !ident.includes('@') ? ident.replace(/[^0-9]/g, '') : '';
     const matched = db.staff.find((s) => {
       const emailMatch = s.email.trim().toLowerCase() === ident;
       const phoneDigits = s.phone.replace(/[^0-9]/g, '');
-      const phoneMatch = Boolean(digits) && (phoneDigits === digits || phoneDigits.endsWith(digits));
-      return emailMatch || phoneMatch || s.id === staffIdentifier;
+      const phoneMatch =
+        digits.length >= 6 &&
+        phoneDigits.length >= 6 &&
+        (phoneDigits === digits || phoneDigits.endsWith(digits));
+      return emailMatch || phoneMatch || s.id === staffIdentifier.trim();
     });
     if (!matched) return null;
     return (
@@ -314,29 +318,18 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
     e.preventDefault();
     setLoginError('');
     setPunchOutReceipt(null);
-    if (!activeCompanyForLogin) {
-      setLoginError('Please select a registered company first.');
-      return;
-    }
-    if (!staffIdentifier.trim() || !staffPassword) {
-      setLoginError('Enter your Staff Email/Phone and Password.');
-      return;
-    }
-    if (!capturedSelfie) {
-      setLoginError('Mandatory Live Front-Camera Selfie is required before proceeding.');
-      return;
-    }
-    if (selfieStage === 'punch_out' && !workCompletedChecked) {
-      setLoginError('Please check "Work Completed" before confirming Punch-Out.');
+    if (!staffIdentifier.trim() || !staffPassword.trim()) {
+      setLoginError('Enter your Email/Phone and Password.');
       return;
     }
 
     setLoggingIn(true);
     const res = await submitFrontSelfieStage({
-      companyId: activeCompanyForLogin.id,
+      companyId: activeCompanyForLogin?.id,
+      lockedCompanyId: lockedCompany?.id,
       identifier: staffIdentifier.trim(),
-      password: staffPassword,
-      selfieUrl: capturedSelfie,
+      password: staffPassword.trim(),
+      selfieUrl: capturedSelfie || undefined,
       stage: selfieStage,
       workCompleted: selfieStage === 'punch_out' ? workCompletedChecked : undefined,
       workCompletionNote: selfieStage === 'punch_out' ? workCompletionNote.trim() : undefined,
@@ -347,7 +340,13 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
     setLoggingIn(false);
 
     if (!res.ok) {
-      setLoginError(res.error || 'Unable to process live selfie check-in.');
+      setLoginError(res.error || 'Unable to verify credentials. Please check and try again.');
+      return;
+    }
+
+    if (res.redirectPath) {
+      stopCamera();
+      navigateToPath(res.redirectPath);
       return;
     }
 
@@ -930,13 +929,13 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
                       setSelfieStage('portal_login');
                       setLoginError('');
                     }}
-                    className={`text-[11px] font-semibold transition-colors ${
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
                       selfieStage === 'portal_login'
-                        ? 'text-[#2563EB] underline'
-                        : 'text-slate-500 hover:text-[#0F172A]'
+                        ? 'bg-[#0F172A] text-white'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                     }`}
                   >
-                    Portal Login Only
+                    Email &amp; Password Login
                   </button>
                 </div>
 
@@ -1147,14 +1146,28 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
                 </div>
               )}
 
+              {!capturedSelfie && selfieStage !== 'portal_login' && (
+                <div className="rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900">
+                  <span>
+                    Capture a live selfie on the left for attendance, or sign in directly with
+                    Email &amp; Password.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelfieStage('portal_login');
+                      setLoginError('');
+                    }}
+                    className="font-bold text-[#1E3A8A] underline whitespace-nowrap"
+                  >
+                    Use Email &amp; Password Only
+                  </button>
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={
-                  loggingIn ||
-                  !capturedSelfie ||
-                  !activeCompanyForLogin ||
-                  (selfieStage === 'punch_out' && !workCompletedChecked)
-                }
+                disabled={loggingIn}
                 className={`w-full min-h-[52px] px-5 rounded-2xl disabled:opacity-50 text-white text-sm font-bold flex items-center justify-center gap-2 transition-colors ${
                   selfieStage === 'punch_out'
                     ? 'bg-rose-600 hover:bg-rose-700 shadow-[0_8px_20px_-6px_rgba(225,29,72,0.45)]'
@@ -1181,8 +1194,10 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
                   <>
                     <UserCheck className="w-4 h-4" />
                     {loggingIn
-                      ? 'Verifying Selfie & Signing In...'
-                      : `Verify Selfie & Enter Portal (${formatTimeIN(liveNowIso)})`}
+                      ? 'Verifying Credentials...'
+                      : capturedSelfie
+                        ? `Verify Selfie & Enter Portal (${formatTimeIN(liveNowIso)})`
+                        : 'Sign In with Email & Password'}
                   </>
                 ) : (
                   <>
@@ -1324,12 +1339,22 @@ export const FrontStaffPortal: React.FC<FrontStaffPortalProps> = ({ companySlug 
                       <MessageCircle className="w-4 h-4" />
                       Save to WhatsApp
                     </a>
-                    <a
-                      href={`/c/${createdCompany.slug}/admin`}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const slug = createdCompany.slug;
+                        await loginCompanyAdmin(
+                          createdCompany.adminEmail,
+                          createdCompany.adminPassword,
+                          slug
+                        );
+                        setTrialModalOpen(false);
+                        navigateToPath(`/c/${slug}/admin`);
+                      }}
                       className="w-full min-h-[46px] px-4 rounded-xl bg-[#2563EB] hover:bg-[#1E3A8A] text-white text-xs font-bold inline-flex items-center justify-center gap-2"
                     >
                       Open My Company Admin Panel →
-                    </a>
+                    </button>
                   </div>
                 </div>
               ) : (

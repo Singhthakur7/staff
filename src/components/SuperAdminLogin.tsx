@@ -8,12 +8,15 @@ export const SuperAdminLogin: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    const res = loginSuperAdmin(email, password);
+    setLoading(true);
+    const res = await loginSuperAdmin(email.trim(), password.trim());
+    setLoading(false);
     if (!res.ok) {
       setError(res.error || 'Authentication failed.');
     }
@@ -42,6 +45,7 @@ export const SuperAdminLogin: React.FC = () => {
             <input
               type="email"
               required
+              autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="super@staff.online"
@@ -55,6 +59,7 @@ export const SuperAdminLogin: React.FC = () => {
               <input
                 type={showPass ? 'text' : 'password'}
                 required
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter Super Admin password"
@@ -79,10 +84,11 @@ export const SuperAdminLogin: React.FC = () => {
 
           <button
             type="submit"
-            className="w-full min-h-[48px] px-5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors"
+            disabled={loading}
+            className="w-full min-h-[48px] px-5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-white text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors"
           >
             <Shield className="w-4 h-4" />
-            Access Super Admin Console
+            {loading ? 'Verifying...' : 'Access Super Admin Console'}
           </button>
         </form>
 

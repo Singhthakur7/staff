@@ -12,6 +12,7 @@ export const CompanyAdminLogin: React.FC<CompanyAdminLoginProps> = ({ companySlu
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const scopedCompany = useMemo(() => {
@@ -19,10 +20,12 @@ export const CompanyAdminLogin: React.FC<CompanyAdminLoginProps> = ({ companySlu
     return companies.find((c) => c.slug.toLowerCase() === companySlug.toLowerCase()) || null;
   }, [companies, companySlug]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    const res = loginCompanyAdmin(email, password, companySlug);
+    setLoading(true);
+    const res = await loginCompanyAdmin(email.trim(), password.trim(), companySlug);
+    setLoading(false);
     if (!res.ok) {
       setError(res.error || 'Unable to sign in.');
     }
@@ -64,11 +67,12 @@ export const CompanyAdminLogin: React.FC<CompanyAdminLoginProps> = ({ companySlu
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-              Company Admin Email
+              Company Admin Email or Phone
             </label>
             <input
-              type="email"
+              type="text"
               required
+              autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="admin@company.com"
@@ -82,6 +86,7 @@ export const CompanyAdminLogin: React.FC<CompanyAdminLoginProps> = ({ companySlu
               <input
                 type={showPass ? 'text' : 'password'}
                 required
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter admin password"
@@ -106,11 +111,11 @@ export const CompanyAdminLogin: React.FC<CompanyAdminLoginProps> = ({ companySlu
 
           <button
             type="submit"
-            disabled={Boolean(scopedCompany && !scopedCompany.active)}
+            disabled={loading || Boolean(scopedCompany && !scopedCompany.active)}
             className="w-full min-h-[48px] px-5 rounded-xl bg-[#0F172A] hover:bg-[#1E3A8A] disabled:opacity-50 text-white text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors"
           >
             <Building2 className="w-4 h-4" />
-            Sign In to Company Admin
+            {loading ? 'Verifying Credentials...' : 'Sign In to Company Admin'}
           </button>
         </form>
 

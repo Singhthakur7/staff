@@ -11,6 +11,7 @@ import {
   dbSetPath,
   dbUpdatePath,
   DEFAULT_SUPER_ADMIN,
+  refreshCloudSnapshotOnce,
   subscribeStaffOnlineRoot,
 } from '../firebase';
 import {
@@ -84,23 +85,26 @@ interface StaffOnlineContextValue {
   openLightbox: (url: string) => void;
   closeLightbox: () => void;
   // Auth
-  loginSuperAdmin: (email: string, password: string) => { ok: boolean; error?: string };
+  loginSuperAdmin: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   loginCompanyAdmin: (
     email: string,
     password: string,
     companySlug?: string
-  ) => { ok: boolean; error?: string; company?: CompanyRecord };
+  ) => Promise<{ ok: boolean; error?: string; company?: CompanyRecord }>;
   loginStaffWithSelfie: (params: {
-    companyId: string;
+    companyId?: string;
+    lockedCompanyId?: string;
     identifier: string;
     password: string;
-    selfieUrl: string;
+    selfieUrl?: string;
+    allowWithoutSelfie?: boolean;
     gpsLat?: number;
     gpsLng?: number;
     gpsLabel?: string;
-  }) => Promise<{ ok: boolean; error?: string }>;
+  }) => Promise<{ ok: boolean; error?: string; redirectPath?: string }>;
   punchOutStaffWithSelfie: (params: {
-    companyId: string;
+    companyId?: string;
+    lockedCompanyId?: string;
     identifier: string;
     password: string;
     selfieUrl: string;
@@ -120,10 +124,11 @@ interface StaffOnlineContextValue {
     workCompletionNote?: string;
   }>;
   submitFrontSelfieStage: (params: {
-    companyId: string;
+    companyId?: string;
+    lockedCompanyId?: string;
     identifier: string;
     password: string;
-    selfieUrl: string;
+    selfieUrl?: string;
     stage: 'office_departure' | 'site_arrival' | 'punch_out' | 'portal_login';
     workTitle?: string;
     fromLocation?: string;
@@ -136,6 +141,7 @@ interface StaffOnlineContextValue {
   }) => Promise<{
     ok: boolean;
     error?: string;
+    redirectPath?: string;
     stage?: 'office_departure' | 'site_arrival' | 'punch_out' | 'portal_login';
     staffName?: string;
     workTitle?: string;
@@ -292,6 +298,153 @@ function loadStoredLang(): Language {
   }
 }
 
+function normalizePhoneDigits(val: string): string {
+  return (val || '').replace(/[^0-9]/g, '');
+}
+
+function matchesAccountIdentifier(
+  rawIdentifier: string,
+  accountEmail: string,
+  accountPhone?: string,
+  accountId?: string
+): boolean {
+  const trimmed = rawIdentifier.trim();
+  const ident = trimmed.toLowerCase();
+  if (!ident) return false;
+  if (accountEmail.trim().toLowerCase() === ident) return true;
+  if (accountId && accountId === trimmed) return true;
+
+  // Only perform phone-number matching when input is NOT an email address
+  if (!ident.includes('@')) {
+    const cleanDigits = normalizePhoneDigits(ident);
+    const phoneDigits = normalizePhoneDigits(accountPhone || '');
+    if (cleanDigits.length >= 6 && phoneDigits.length >= 6) {
+      if (phoneDigits === cleanDigits) return true;
+      if (cleanDigits.length >= 10 && phoneDigits.slice(-10) === cleanDigits.slice(-10)) {
+        return true;
+      }
+      if (phoneDigits.endsWith(cleanDigits)) return true;
+    }
+  }
+  return false;
+}
+
+type CredentialLookupResult =
+  | { kind: 'staff'; company: CompanyRecord; staff: StaffMember }
+  | { kind: 'company_admin'; company: CompanyRecord }
+  | { kind: 'super_admin' }
+  | { kind: 'error'; error: string; retryFromCloud?: boolean };
+
+function resolveFrontCredentials(
+  state: StaffOnlineRootState,
+  params: {
+    companyId?: string;
+    lockedCompanyId?: string;
+    identifier: string;
+    password: string;
+  }
+): CredentialLookupResult {
+  const cleanIdent = params.identifier.trim();
+  const cleanPass = params.password.trim();
+  if (!cleanIdent || !cleanPass) {
+    return { kind: 'error', error: 'Please enter your Email/Phone and Password.' };
+  }
+
+  const allCompanies = Object.values(state.companies);
+  const searchCompanies: CompanyRecord[] = [];
+  if (params.lockedCompanyId) {
+    const locked = state.companies[params.lockedCompanyId];
+    if (locked) searchCompanies.push(locked);
+  } else {
+    if (params.companyId && state.companies[params.companyId]) {
+      searchCompanies.push(state.companies[params.companyId]);
+    }
+    allCompanies.forEach((c) => {
+      if (!searchCompanies.some((existing) => existing.id === c.id)) {
+        searchCompanies.push(c);
+      }
+    });
+  }
+
+  let matchedStaffWrongPassword = false;
+  let disabledStaffName = '';
+  let suspendedCompanyName = '';
+
+  // 1. Check Staff Accounts first (selected company first, then all companies if unlocked)
+  for (const company of searchCompanies) {
+    const db = state.companyData[company.id] || EMPTY_COMPANY_DB;
+    for (const s of db.staff) {
+      if (matchesAccountIdentifier(cleanIdent, s.email, s.phone, s.id)) {
+        if ((s.password || '').trim() === cleanPass) {
+          if (!company.active) {
+            suspendedCompanyName = company.name;
+            continue;
+          }
+          if (!s.active) {
+            disabledStaffName = s.name;
+            continue;
+          }
+          return { kind: 'staff', company, staff: s };
+        }
+        matchedStaffWrongPassword = true;
+      }
+    }
+  }
+
+  if (suspendedCompanyName) {
+    return {
+      kind: 'error',
+      error: `${suspendedCompanyName} account is currently suspended. Please contact support.`,
+    };
+  }
+  if (disabledStaffName) {
+    return {
+      kind: 'error',
+      error: 'Your staff account is currently disabled by Company Admin.',
+    };
+  }
+
+  // 2. Check if user entered Company Admin credentials on the Front Page login form
+  let matchedAdminWrongPassword = false;
+  for (const company of searchCompanies) {
+    if (matchesAccountIdentifier(cleanIdent, company.adminEmail, company.phone)) {
+      if ((company.adminPassword || '').trim() === cleanPass) {
+        if (!company.active) {
+          return {
+            kind: 'error',
+            error: 'This company account is currently suspended. Please contact Staff. Online support.',
+          };
+        }
+        return { kind: 'company_admin', company };
+      }
+      matchedAdminWrongPassword = true;
+    }
+  }
+
+  // 3. Check if user entered Super Admin credentials
+  if (
+    !params.lockedCompanyId &&
+    cleanIdent.toLowerCase() === state.superAdmin.email.trim().toLowerCase() &&
+    cleanPass === (state.superAdmin.password || '').trim()
+  ) {
+    return { kind: 'super_admin' };
+  }
+
+  if (matchedStaffWrongPassword || matchedAdminWrongPassword) {
+    return {
+      kind: 'error',
+      error: 'Incorrect password for this account. Please check your password and try again.',
+      retryFromCloud: true,
+    };
+  }
+
+  return {
+    kind: 'error',
+    error: 'No account found with this Email/Phone and Password. Please check your credentials.',
+    retryFromCloud: true,
+  };
+}
+
 export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isReady, setIsReady] = useState(false);
   const [root, setRoot] = useState<StaffOnlineRootState>({
@@ -311,10 +464,15 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsub = subscribeStaffOnlineRoot((nextState) => {
-      setRoot(nextState);
-      setIsReady(true);
-    });
+    const unsub = subscribeStaffOnlineRoot(
+      (nextState) => {
+        setRoot(nextState);
+        setIsReady(true);
+      },
+      () => {
+        setIsReady(true);
+      }
+    );
     return unsub;
   }, []);
 
@@ -390,16 +548,23 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   // Auth Handlers
   const loginSuperAdmin = useCallback(
-    (email: string, password: string) => {
+    async (email: string, password: string) => {
       const cleanEmail = email.trim().toLowerCase();
-      if (
-        cleanEmail === root.superAdmin.email.trim().toLowerCase() &&
-        password === root.superAdmin.password
-      ) {
+      const cleanPass = password.trim();
+      const checkConfig = (cfg: SuperAdminConfig) =>
+        cleanEmail === cfg.email.trim().toLowerCase() && cleanPass === (cfg.password || '').trim();
+
+      let activeConfig = root.superAdmin;
+      if (!checkConfig(activeConfig)) {
+        const fresh = await refreshCloudSnapshotOnce();
+        activeConfig = fresh.superAdmin;
+      }
+
+      if (checkConfig(activeConfig)) {
         const nextSession: AuthSession = {
           role: 'super_admin',
           name: 'Super Administrator',
-          email: root.superAdmin.email,
+          email: activeConfig.email,
         };
         setSession(nextSession);
         saveStoredSession(nextSession);
@@ -412,24 +577,56 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
   );
 
   const loginCompanyAdmin = useCallback(
-    (email: string, password: string, companySlug?: string) => {
-      const cleanEmail = email.trim().toLowerCase();
-      const targetList = companySlug
-        ? companies.filter((c) => c.slug.toLowerCase() === companySlug.toLowerCase())
-        : companies;
+    async (email: string, password: string, companySlug?: string) => {
+      const cleanIdent = email.trim();
+      const cleanPass = password.trim();
+      if (!cleanIdent || !cleanPass) {
+        return { ok: false, error: 'Please enter your Company Admin email and password.' };
+      }
 
-      const matched = targetList.find(
-        (c) => c.adminEmail.trim().toLowerCase() === cleanEmail && c.adminPassword === password
-      );
+      const tryMatch = (list: CompanyRecord[]) => {
+        const scoped = companySlug
+          ? list.filter((c) => c.slug.toLowerCase() === companySlug.toLowerCase())
+          : list;
+        const matched = scoped.find(
+          (c) =>
+            matchesAccountIdentifier(cleanIdent, c.adminEmail, c.phone) &&
+            (c.adminPassword || '').trim() === cleanPass
+        );
+        const emailExists = scoped.some((c) =>
+          matchesAccountIdentifier(cleanIdent, c.adminEmail, c.phone)
+        );
+        return { scoped, matched, emailExists };
+      };
 
-      if (!matched) {
+      let result = tryMatch(companies);
+      if (!result.matched) {
+        const fresh = await refreshCloudSnapshotOnce();
+        result = tryMatch(Object.values(fresh.companies));
+      }
+
+      if (!result.matched) {
+        if (companySlug && result.scoped.length === 0) {
+          return {
+            ok: false,
+            error: `No company found for URL /c/${companySlug}. Please check the link.`,
+          };
+        }
+        if (result.emailExists) {
+          return {
+            ok: false,
+            error: 'Incorrect password for this Company Admin account. Please check and try again.',
+          };
+        }
         return {
           ok: false,
           error: companySlug
             ? 'Invalid Company Admin email or password for this company.'
-            : 'Invalid Company Admin email or password.',
+            : 'No Company Admin account found with this email. Register via Free Trial or verify your email.',
         };
       }
+
+      const matched = result.matched;
       if (!matched.active) {
         return {
           ok: false,
@@ -451,91 +648,131 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
     [companies, pushToast]
   );
 
-  const loginStaffWithSelfie = useCallback(
+  const authenticateFrontAccount = useCallback(
     async (params: {
-      companyId: string;
+      companyId?: string;
+      lockedCompanyId?: string;
       identifier: string;
       password: string;
-      selfieUrl: string;
+    }): Promise<{
+      state: StaffOnlineRootState;
+      lookup: CredentialLookupResult;
+    }> => {
+      let currentState = root;
+      let lookup = resolveFrontCredentials(currentState, params);
+      if (lookup.kind === 'error' && lookup.retryFromCloud) {
+        currentState = await refreshCloudSnapshotOnce();
+        lookup = resolveFrontCredentials(currentState, params);
+      }
+      return { state: currentState, lookup };
+    },
+    [root]
+  );
+
+  const loginStaffWithSelfie = useCallback(
+    async (params: {
+      companyId?: string;
+      lockedCompanyId?: string;
+      identifier: string;
+      password: string;
+      selfieUrl?: string;
+      allowWithoutSelfie?: boolean;
       gpsLat?: number;
       gpsLng?: number;
       gpsLabel?: string;
     }) => {
-      const company = root.companies[params.companyId];
-      if (!company) {
-        return { ok: false, error: 'Selected company was not found.' };
-      }
-      if (!company.active) {
-        return { ok: false, error: 'This company account is suspended.' };
-      }
-      if (!params.selfieUrl) {
-        return { ok: false, error: 'Live front-camera selfie capture is mandatory before login.' };
-      }
-
-      const db = root.companyData[company.id] || EMPTY_COMPANY_DB;
-      const ident = params.identifier.trim().toLowerCase();
-      const cleanDigits = ident.replace(/[^0-9]/g, '');
-
-      const matchedStaff = db.staff.find((s) => {
-        const emailMatch = s.email.trim().toLowerCase() === ident;
-        const phoneDigits = s.phone.replace(/[^0-9]/g, '');
-        const phoneMatch =
-          Boolean(cleanDigits) &&
-          (phoneDigits === cleanDigits || phoneDigits.endsWith(cleanDigits));
-        const idMatch = s.id === params.identifier;
-        return (emailMatch || phoneMatch || idMatch) && s.password === params.password;
+      const { lookup } = await authenticateFrontAccount({
+        companyId: params.companyId,
+        lockedCompanyId: params.lockedCompanyId,
+        identifier: params.identifier,
+        password: params.password,
       });
 
-      if (!matchedStaff) {
-        return { ok: false, error: 'Invalid staff email/phone or password.' };
-      }
-      if (!matchedStaff.active) {
-        return { ok: false, error: 'Your staff account is currently disabled by Company Admin.' };
+      if (lookup.kind === 'company_admin') {
+        const nextSession: AuthSession = {
+          role: 'company_admin',
+          companyId: lookup.company.id,
+          name: `${lookup.company.name} Admin`,
+          email: lookup.company.adminEmail,
+        };
+        setSession(nextSession);
+        saveStoredSession(nextSession);
+        pushToast({ type: 'success', title: `Welcome to ${lookup.company.name} Admin Panel` });
+        return { ok: true, redirectPath: `/c/${lookup.company.slug}/admin` };
       }
 
-      const uploadRes = await uploadToCloudinary(params.selfieUrl);
-      const hostedSelfieUrl = uploadRes.url || params.selfieUrl;
+      if (lookup.kind === 'super_admin') {
+        const nextSession: AuthSession = {
+          role: 'super_admin',
+          name: 'Super Administrator',
+          email: root.superAdmin.email,
+        };
+        setSession(nextSession);
+        saveStoredSession(nextSession);
+        pushToast({ type: 'success', title: 'Signed in to Super Admin Console' });
+        return { ok: true, redirectPath: '/super-admin' };
+      }
+
+      if (lookup.kind === 'error') {
+        return { ok: false, error: lookup.error };
+      }
+
+      const { company, staff: matchedStaff } = lookup;
+
+      if (!params.selfieUrl && !params.allowWithoutSelfie) {
+        return {
+          ok: false,
+          error:
+            'Live front-camera selfie capture is required for attendance check-in. Capture a selfie or switch to "Email & Password Login".',
+        };
+      }
 
       const nowIso = new Date().toISOString();
       const todayIso = getTodayISO();
       const currentHHMM = getCurrentTimeHHMM();
-      const punchId = uid('punch');
+      let hostedSelfieUrl = '';
 
-      const loginPunch: PunchLogRecord = {
-        id: punchId,
-        staffId: matchedStaff.id,
-        staffName: matchedStaff.name,
-        staffRole: matchedStaff.role,
-        type: 'login_selfie',
-        workTitle: 'Live Selfie Login Check-In',
-        date: todayIso,
-        mode: 'Live Selfie Check-In',
-        fromLocation: company.place || 'Field',
-        toLocation: company.place || 'Field',
-        workTime: currentHHMM,
-        departTime: currentHHMM,
-        arriveTime: currentHHMM,
-        punchInTime: nowIso,
-        punchOutTime: nowIso,
-        status: 'completed',
-        dutyWage: 0,
-        selfieUrl: hostedSelfieUrl,
-        gpsLat: params.gpsLat,
-        gpsLng: params.gpsLng,
-        gpsLabel: params.gpsLabel || 'GPS Captured',
-        createdAt: nowIso,
-      };
+      if (params.selfieUrl) {
+        const uploadRes = await uploadToCloudinary(params.selfieUrl);
+        hostedSelfieUrl = uploadRes.url || params.selfieUrl;
 
-      await dbSetPath(
-        `staff_online/company_data/${company.id}/punchLogs/${punchId}`,
-        loginPunch
-      );
-      await pushNotification(company.id, {
-        targetRole: 'company_admin',
-        title: `Live Selfie Check-In: ${matchedStaff.name}`,
-        message: `${matchedStaff.name} (${matchedStaff.role}) verified live selfie login at ${currentHHMM}.`,
-        category: 'punch',
-      });
+        const punchId = uid('punch');
+        const loginPunch: PunchLogRecord = {
+          id: punchId,
+          staffId: matchedStaff.id,
+          staffName: matchedStaff.name,
+          staffRole: matchedStaff.role,
+          type: 'login_selfie',
+          workTitle: 'Live Selfie Login Check-In',
+          date: todayIso,
+          mode: 'Live Selfie Check-In',
+          fromLocation: company.place || 'Field',
+          toLocation: company.place || 'Field',
+          workTime: currentHHMM,
+          departTime: currentHHMM,
+          arriveTime: currentHHMM,
+          punchInTime: nowIso,
+          punchOutTime: nowIso,
+          status: 'completed',
+          dutyWage: 0,
+          selfieUrl: hostedSelfieUrl,
+          gpsLat: params.gpsLat,
+          gpsLng: params.gpsLng,
+          gpsLabel: params.gpsLabel || 'GPS Captured',
+          createdAt: nowIso,
+        };
+
+        await dbSetPath(
+          `staff_online/company_data/${company.id}/punchLogs/${punchId}`,
+          loginPunch
+        );
+        await pushNotification(company.id, {
+          targetRole: 'company_admin',
+          title: `Live Selfie Check-In: ${matchedStaff.name}`,
+          message: `${matchedStaff.name} (${matchedStaff.role}) verified live selfie login at ${currentHHMM}.`,
+          category: 'punch',
+        });
+      }
 
       const nextSession: AuthSession = {
         role: 'staff',
@@ -543,23 +780,26 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
         staffId: matchedStaff.id,
         name: matchedStaff.name,
         email: matchedStaff.email,
-        verifiedSelfieUrl: hostedSelfieUrl,
+        verifiedSelfieUrl: hostedSelfieUrl || undefined,
         verifiedAt: nowIso,
       };
       setSession(nextSession);
       saveStoredSession(nextSession);
       pushToast({
         type: 'success',
-        title: `Live Selfie Verified — Welcome, ${matchedStaff.name}`,
+        title: hostedSelfieUrl
+          ? `Live Selfie Verified — Welcome, ${matchedStaff.name}`
+          : `Signed in — Welcome, ${matchedStaff.name}`,
       });
       return { ok: true };
     },
-    [root.companies, root.companyData, pushNotification, pushToast]
+    [authenticateFrontAccount, root.superAdmin.email, pushNotification, pushToast]
   );
 
   const punchOutStaffWithSelfie = useCallback(
     async (params: {
-      companyId: string;
+      companyId?: string;
+      lockedCompanyId?: string;
       identifier: string;
       password: string;
       selfieUrl: string;
@@ -569,15 +809,11 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
       gpsLng?: number;
       gpsLabel?: string;
     }) => {
-      const company = root.companies[params.companyId];
-      if (!company) {
-        return { ok: false, error: 'Selected company was not found.' };
-      }
-      if (!company.active) {
-        return { ok: false, error: 'This company account is suspended.' };
-      }
       if (!params.selfieUrl) {
-        return { ok: false, error: 'Live front-camera selfie capture is mandatory before Punch-Out.' };
+        return {
+          ok: false,
+          error: 'Live front-camera selfie capture is mandatory before Punch-Out.',
+        };
       }
       if (params.workCompleted === false) {
         return {
@@ -586,26 +822,25 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
         };
       }
 
-      const db = root.companyData[company.id] || EMPTY_COMPANY_DB;
-      const ident = params.identifier.trim().toLowerCase();
-      const cleanDigits = ident.replace(/[^0-9]/g, '');
-
-      const matchedStaff = db.staff.find((s) => {
-        const emailMatch = s.email.trim().toLowerCase() === ident;
-        const phoneDigits = s.phone.replace(/[^0-9]/g, '');
-        const phoneMatch =
-          Boolean(cleanDigits) &&
-          (phoneDigits === cleanDigits || phoneDigits.endsWith(cleanDigits));
-        const idMatch = s.id === params.identifier;
-        return (emailMatch || phoneMatch || idMatch) && s.password === params.password;
+      const { state: latestState, lookup } = await authenticateFrontAccount({
+        companyId: params.companyId,
+        lockedCompanyId: params.lockedCompanyId,
+        identifier: params.identifier,
+        password: params.password,
       });
 
-      if (!matchedStaff) {
-        return { ok: false, error: 'Invalid staff email/phone or password.' };
+      if (lookup.kind !== 'staff') {
+        return {
+          ok: false,
+          error:
+            lookup.kind === 'error'
+              ? lookup.error
+              : 'Punch-Out is only available for Staff accounts. Switch to Email & Password Login to open your Admin Panel.',
+        };
       }
-      if (!matchedStaff.active) {
-        return { ok: false, error: 'Your staff account is currently disabled by Company Admin.' };
-      }
+
+      const { company, staff: matchedStaff } = lookup;
+      const db = latestState.companyData[company.id] || EMPTY_COMPANY_DB;
 
       const activeDuty = db.punchLogs.find(
         (p) => p.staffId === matchedStaff.id && p.type === 'duty_punch' && p.status === 'active'
@@ -667,15 +902,16 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
         workCompletionNote: note || undefined,
       };
     },
-    [root.companies, root.companyData, pushNotification, pushToast]
+    [authenticateFrontAccount, pushNotification, pushToast]
   );
 
   const submitFrontSelfieStage = useCallback(
     async (params: {
-      companyId: string;
+      companyId?: string;
+      lockedCompanyId?: string;
       identifier: string;
       password: string;
-      selfieUrl: string;
+      selfieUrl?: string;
       stage: 'office_departure' | 'site_arrival' | 'punch_out' | 'portal_login';
       workTitle?: string;
       fromLocation?: string;
@@ -687,10 +923,66 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
       gpsLabel?: string;
     }) => {
       if (params.stage === 'portal_login') {
-        const res = await loginStaffWithSelfie(params);
+        const res = await loginStaffWithSelfie({
+          ...params,
+          allowWithoutSelfie: true,
+        });
         return { ...res, stage: 'portal_login' as const };
       }
+
+      // First verify credentials (so if a Company Admin / Super Admin enters their ID on the Front Page,
+      // they are routed straight to their Admin Panel even before camera capture!)
+      const { state: latestState, lookup } = await authenticateFrontAccount({
+        companyId: params.companyId,
+        lockedCompanyId: params.lockedCompanyId,
+        identifier: params.identifier,
+        password: params.password,
+      });
+
+      if (lookup.kind === 'company_admin') {
+        const nextSession: AuthSession = {
+          role: 'company_admin',
+          companyId: lookup.company.id,
+          name: `${lookup.company.name} Admin`,
+          email: lookup.company.adminEmail,
+        };
+        setSession(nextSession);
+        saveStoredSession(nextSession);
+        pushToast({ type: 'success', title: `Welcome to ${lookup.company.name} Admin Panel` });
+        return {
+          ok: true,
+          redirectPath: `/c/${lookup.company.slug}/admin`,
+          stage: 'portal_login' as const,
+        };
+      }
+
+      if (lookup.kind === 'super_admin') {
+        const nextSession: AuthSession = {
+          role: 'super_admin',
+          name: 'Super Administrator',
+          email: latestState.superAdmin.email,
+        };
+        setSession(nextSession);
+        saveStoredSession(nextSession);
+        pushToast({ type: 'success', title: 'Signed in to Super Admin Console' });
+        return {
+          ok: true,
+          redirectPath: '/super-admin',
+          stage: 'portal_login' as const,
+        };
+      }
+
+      if (lookup.kind === 'error') {
+        return { ok: false, error: lookup.error };
+      }
+
       if (params.stage === 'punch_out') {
+        if (!params.selfieUrl) {
+          return {
+            ok: false,
+            error: 'Live front-camera selfie capture is mandatory before Punch-Out.',
+          };
+        }
         if (!params.workCompleted) {
           return {
             ok: false,
@@ -699,6 +991,7 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
         }
         const res = await punchOutStaffWithSelfie({
           ...params,
+          selfieUrl: params.selfieUrl,
           workCompleted: true,
           workCompletionNote: params.workCompletionNote,
         });
@@ -709,37 +1002,16 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
         };
       }
 
-      const company = root.companies[params.companyId];
-      if (!company) {
-        return { ok: false, error: 'Selected company was not found.' };
-      }
-      if (!company.active) {
-        return { ok: false, error: 'This company account is suspended.' };
-      }
       if (!params.selfieUrl) {
-        return { ok: false, error: 'Live front-camera selfie capture is mandatory.' };
+        return {
+          ok: false,
+          error:
+            'Please capture your live front-camera selfie first (or click "Email & Password Login" to open your Staff Portal directly).',
+        };
       }
 
-      const db = root.companyData[company.id] || EMPTY_COMPANY_DB;
-      const ident = params.identifier.trim().toLowerCase();
-      const cleanDigits = ident.replace(/[^0-9]/g, '');
-
-      const matchedStaff = db.staff.find((s) => {
-        const emailMatch = s.email.trim().toLowerCase() === ident;
-        const phoneDigits = s.phone.replace(/[^0-9]/g, '');
-        const phoneMatch =
-          Boolean(cleanDigits) &&
-          (phoneDigits === cleanDigits || phoneDigits.endsWith(cleanDigits));
-        const idMatch = s.id === params.identifier;
-        return (emailMatch || phoneMatch || idMatch) && s.password === params.password;
-      });
-
-      if (!matchedStaff) {
-        return { ok: false, error: 'Invalid staff email/phone or password.' };
-      }
-      if (!matchedStaff.active) {
-        return { ok: false, error: 'Your staff account is currently disabled by Company Admin.' };
-      }
+      const { company, staff: matchedStaff } = lookup;
+      const db = latestState.companyData[company.id] || EMPTY_COMPANY_DB;
 
       const uploadRes = await uploadToCloudinary(params.selfieUrl);
       const hostedSelfieUrl = uploadRes.url || params.selfieUrl;
@@ -910,8 +1182,7 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
       };
     },
     [
-      root.companies,
-      root.companyData,
+      authenticateFrontAccount,
       loginStaffWithSelfie,
       punchOutStaffWithSelfie,
       pushNotification,
@@ -996,9 +1267,16 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const updateCompany = useCallback(
     async (companyId: string, updates: Partial<CompanyRecord>) => {
+      const normalized: Partial<CompanyRecord> = { ...updates };
+      if (typeof normalized.adminEmail === 'string') {
+        normalized.adminEmail = normalized.adminEmail.trim().toLowerCase();
+      }
+      if (typeof normalized.adminPassword === 'string') {
+        normalized.adminPassword = normalized.adminPassword.trim();
+      }
       await dbUpdatePath(
         `staff_online/companies/${companyId}`,
-        updates as Record<string, unknown>
+        normalized as Record<string, unknown>
       );
       pushToast({ type: 'success', title: 'Company details updated' });
     },
@@ -1094,11 +1372,28 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ) => {
       const cid = resolveCompanyId(companyIdOverride);
       if (!cid) return null;
+      const cleanEmail = input.email.trim().toLowerCase();
+      const existingDb = root.companyData[cid] || EMPTY_COMPANY_DB;
+      const duplicate = existingDb.staff.find(
+        (s) => s.email.trim().toLowerCase() === cleanEmail
+      );
+      if (duplicate) {
+        pushToast({
+          type: 'error',
+          title: `Staff email already exists (${duplicate.name})`,
+          detail: 'Use a unique login email or edit the existing staff member.',
+        });
+        return null;
+      }
       const id = uid('stf');
       const staff: StaffMember = {
         ...input,
         id,
-        email: input.email.trim().toLowerCase(),
+        name: input.name.trim(),
+        phone: input.phone.trim(),
+        email: cleanEmail,
+        password: input.password.trim(),
+        upiId: (input.upiId || '').trim(),
         active: true,
         createdAt: new Date().toISOString(),
       };
@@ -1106,7 +1401,7 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
       pushToast({ type: 'success', title: `Staff added: ${staff.name}` });
       return staff;
     },
-    [resolveCompanyId, pushToast]
+    [resolveCompanyId, root.companyData, pushToast]
   );
 
   const updateStaff = useCallback(
@@ -1117,9 +1412,25 @@ export const StaffOnlineProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ) => {
       const cid = resolveCompanyId(companyIdOverride);
       if (!cid) return;
+      const normalizedUpdates: Partial<StaffMember> = { ...updates };
+      if (typeof normalizedUpdates.email === 'string') {
+        normalizedUpdates.email = normalizedUpdates.email.trim().toLowerCase();
+      }
+      if (typeof normalizedUpdates.password === 'string') {
+        normalizedUpdates.password = normalizedUpdates.password.trim();
+      }
+      if (typeof normalizedUpdates.name === 'string') {
+        normalizedUpdates.name = normalizedUpdates.name.trim();
+      }
+      if (typeof normalizedUpdates.phone === 'string') {
+        normalizedUpdates.phone = normalizedUpdates.phone.trim();
+      }
+      if (typeof normalizedUpdates.upiId === 'string') {
+        normalizedUpdates.upiId = normalizedUpdates.upiId.trim();
+      }
       await dbUpdatePath(
         `staff_online/company_data/${cid}/staff/${staffId}`,
-        updates as Record<string, unknown>
+        normalizedUpdates as Record<string, unknown>
       );
       pushToast({ type: 'success', title: 'Staff details updated successfully' });
     },

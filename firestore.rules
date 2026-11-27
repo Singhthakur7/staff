@@ -3,40 +3,13 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // =========================================================================
-    // PILLAR 0: GLOBAL DEFAULT-DENY SAFETY NET
-    // =========================================================================
+    // Global default-deny safety net
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // =========================================================================
-    // PHASE 3: HARDENED GLOBAL PRIMITIVES
-    // =========================================================================
     function incoming() {
       return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function isVerifiedUser() {
-      return isSignedIn()
-        && request.auth.token.email is string
-        && request.auth.token.email_verified == true;
-    }
-
-    function userEmail() {
-      return request.auth.token.email.lower();
-    }
-
-    function emailKey() {
-      return request.auth.token.email.lower().replace('[^a-z0-9]', '_');
     }
 
     function isValidId(id) {
@@ -46,18 +19,8 @@ service cloud.firestore {
         && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    function isValidSlug(slug) {
-      return slug is string
-        && slug.size() >= 2
-        && slug.size() <= 80
-        && slug.matches('^[a-z0-9\\-]+$');
-    }
-
-    function isValidEmail(val) {
-      return val is string
-        && val.size() >= 3
-        && val.size() <= 160
-        && val.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$');
+    function isNonEmptyString(val, maxLen) {
+      return val is string && val.size() >= 1 && val.size() <= maxLen;
     }
 
     function optString(data, key, maxLen) {
@@ -68,1113 +31,259 @@ service cloud.firestore {
       return !(key in data) || (data[key] is number);
     }
 
-    // List-safe Master Admin check (ZERO get()/exists() calls for Pillar 8 compliance)
-    function isBootstrappedMasterAdmin() {
-      return isVerifiedUser() && userEmail() == 'shriyanshsingh7581@gmail.com';
+    function optBool(data, key) {
+      return !(key in data) || (data[key] is bool);
     }
 
-    // Full Master Admin check for single-doc get/create/update/delete
-    function isMasterAdmin() {
-      return isBootstrappedMasterAdmin()
-        || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
-    }
-
-    // =========================================================================
-    // PILLAR 1: MASTER GATE RELATIONAL HELPERS (NEVER USED IN ALLOW LIST)
-    // =========================================================================
-    function companyExists(companyId) {
-      return exists(/databases/$(database)/documents/companies/$(companyId));
-    }
-
-    function companyExistsAfter(companyId) {
-      return existsAfter(/databases/$(database)/documents/companies/$(companyId));
-    }
-
-    function companyData(companyId) {
-      return get(/databases/$(database)/documents/companies/$(companyId)).data;
-    }
-
-    function companyIsActive(companyId) {
-      return companyExists(companyId) && companyData(companyId).active == true;
-    }
-
-    function isActiveCompanyAdmin(companyId) {
-      return isVerifiedUser()
-        && companyIsActive(companyId)
-        && companyData(companyId).adminEmail == userEmail();
-    }
-
-    function isActiveCompanyMember(companyId) {
-      return isVerifiedUser()
-        && companyIsActive(companyId)
-        && exists(/databases/$(database)/documents/companies/$(companyId)/members/$(emailKey()))
-        && get(/databases/$(database)/documents/companies/$(companyId)/members/$(emailKey())).data.active == true;
-    }
-
-    function isActiveCompanyStaff(companyId) {
-      return isActiveCompanyMember(companyId)
-        && get(/databases/$(database)/documents/companies/$(companyId)/members/$(emailKey())).data.role == 'staff';
-    }
-
-    function hasValidCreateTimestamps(data) {
-      return data.createdAt == request.time && data.updatedAt == request.time;
-    }
-
-    function hasValidUpdateTimestamps(data) {
-      return data.createdAt == existing().createdAt && data.updatedAt == request.time;
-    }
-
-    // =========================================================================
-    // PILLAR 2: VALIDATION BLUEPRINTS (ANTI-UPDATE-GAP HELPERS)
-    // =========================================================================
-    function isValidAdminUser(data) {
-      return data.keys().hasAll(['email', 'role', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['email', 'displayName', 'role', 'createdAt', 'updatedAt'])
-        && isValidEmail(data.email)
-        && optString(data, 'displayName', 120)
-        && data.role == 'master_admin'
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidMasterConfig(data) {
-      return data.keys().hasAll(['brandName', 'supportEmail', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['brandName', 'supportEmail', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.brandName is string && data.brandName.size() >= 2 && data.brandName.size() <= 120
-        && isValidEmail(data.supportEmail)
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
+    function isValidSuperAdminConfig(data) {
+      return data.keys().hasAll(['email', 'password', 'updatedAt'])
+        && data.keys().hasOnly(['email', 'password', 'updatedAt'])
+        && isNonEmptyString(data.email, 160)
+        && isNonEmptyString(data.password, 160)
+        && isNonEmptyString(data.updatedAt, 64);
     }
 
     function isValidCompany(data, companyId) {
-      return data.keys().hasAll(['id', 'name', 'slug', 'adminEmail', 'active', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'name', 'slug', 'tagline', 'address', 'phone', 'upi', 'badge', 'adminEmail', 'active', 'createdByUid', 'createdAt', 'updatedAt'])
+      return data.keys().hasAll(['id', 'name', 'slug', 'adminEmail', 'adminPassword', 'planStatus', 'active', 'createdAt'])
         && data.id == companyId
         && isValidId(data.id)
-        && data.name is string && data.name.size() >= 2 && data.name.size() <= 160
-        && isValidSlug(data.slug)
-        && optString(data, 'tagline', 200)
-        && optString(data, 'address', 300)
+        && isNonEmptyString(data.name, 160)
+        && isNonEmptyString(data.slug, 100)
+        && optString(data, 'place', 200)
         && optString(data, 'phone', 40)
-        && optString(data, 'upi', 120)
-        && optString(data, 'badge', 10)
-        && isValidEmail(data.adminEmail)
+        && isNonEmptyString(data.adminEmail, 160)
+        && isNonEmptyString(data.adminPassword, 160)
+        && (data.planStatus == 'trial' || data.planStatus == 'annual')
+        && optNumber(data, 'planYears')
+        && optNumber(data, 'planRatePerYear')
+        && optString(data, 'planStartDate', 32)
+        && optString(data, 'planEndDate', 32)
         && data.active is bool
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
+        && isNonEmptyString(data.createdAt, 64);
     }
 
-    function isValidMembership(data, membershipId) {
-      return data.keys().hasAll(['id', 'companyId', 'companySlug', 'companyName', 'companyActive', 'companyAdminEmail', 'email', 'role', 'active', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companySlug', 'companyName', 'companyActive', 'companyAdminEmail', 'email', 'role', 'staffId', 'active', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == membershipId
+    function isValidStaff(data, docId) {
+      return data.keys().hasAll(['id', 'name', 'role', 'dutyWage', 'email', 'password', 'active', 'createdAt'])
+        && data.id == docId
         && isValidId(data.id)
-        && isValidId(data.companyId)
-        && isValidSlug(data.companySlug)
-        && data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 160
-        && data.companyActive is bool
-        && isValidEmail(data.companyAdminEmail)
-        && isValidEmail(data.email)
-        && (data.role == 'company_admin' || data.role == 'staff')
-        && optString(data, 'staffId', 128)
-        && data.active is bool
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidCompanyMember(data, companyId, memberKey) {
-      return data.keys().hasAll(['id', 'companyId', 'email', 'role', 'active', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'email', 'role', 'staffId', 'active', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == memberKey
-        && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.email)
-        && (data.role == 'company_admin' || data.role == 'staff')
-        && optString(data, 'staffId', 128)
-        && data.active is bool
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidStaff(data, companyId, staffId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'name', 'role', 'email', 'dailyWage', 'salaryDay', 'active', 'joinedDate', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'name', 'role', 'phone', 'email', 'upiId', 'dailyWage', 'salaryDay', 'emergencyContact', 'kycLast4', 'active', 'joinedDate', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == staffId
-        && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
-        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
-        && data.role is string && data.role.size() >= 1 && data.role.size() <= 100
+        && isNonEmptyString(data.name, 160)
+        && isNonEmptyString(data.role, 120)
+        && data.dutyWage is number && data.dutyWage >= 0 && data.dutyWage <= 10000000
         && optString(data, 'phone', 40)
-        && isValidEmail(data.email)
-        && optString(data, 'upiId', 120)
-        && data.dailyWage is number && data.dailyWage >= 0 && data.dailyWage <= 1000000
-        && data.salaryDay is number && data.salaryDay >= 1 && data.salaryDay <= 31
-        && optString(data, 'emergencyContact', 120)
-        && optString(data, 'kycLast4', 8)
+        && isNonEmptyString(data.email, 160)
+        && isNonEmptyString(data.password, 160)
+        && optString(data, 'upiId', 160)
+        && optString(data, 'periodFrom', 32)
+        && optString(data, 'periodTo', 32)
         && data.active is bool
-        && data.joinedDate is string && data.joinedDate.size() <= 32
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
+        && isNonEmptyString(data.createdAt, 64);
     }
 
-    function isValidAttendance(data, companyId, attendanceId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'date', 'punchInTime', 'status', 'rateMode', 'wageEarned', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'date', 'punchInTime', 'punchOutTime', 'status', 'rateMode', 'wageEarned', 'studioName', 'studioPhone', 'venue', 'fromLocation', 'toLocation', 'workNotes', 'gpsLat', 'gpsLng', 'gpsLabel', 'selfieUrl', 'lastEditedBy', 'lastEditedAt', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == attendanceId
+    function isValidAdvance(data, docId) {
+      return data.keys().hasAll(['id', 'staffId', 'staffName', 'amount', 'date', 'mode', 'kind', 'confirmationStatus', 'createdAt'])
+        && data.id == docId
         && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
         && isValidId(data.staffId)
-        && isValidEmail(data.staffEmail)
-        && data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120
-        && data.date is string && data.date.size() <= 32
-        && data.punchInTime is string && data.punchInTime.size() <= 64
-        && optString(data, 'punchOutTime', 64)
-        && (data.status == 'working' || data.status == 'completed')
-        && (data.rateMode == 'regular' || data.rateMode == 'half' || data.rateMode == 'own_camera' || data.rateMode == 'live_single_cam')
-        && data.wageEarned is number && data.wageEarned >= 0 && data.wageEarned <= 100000
-        && optString(data, 'studioName', 160)
-        && optString(data, 'studioPhone', 40)
-        && optString(data, 'venue', 240)
-        && optString(data, 'fromLocation', 160)
-        && optString(data, 'toLocation', 160)
-        && optString(data, 'workNotes', 1000)
-        && optNumber(data, 'gpsLat')
-        && optNumber(data, 'gpsLng')
-        && optString(data, 'gpsLabel', 200)
-        && optString(data, 'selfieUrl', 120000)
-        && optString(data, 'lastEditedBy', 120)
-        && optString(data, 'lastEditedAt', 64)
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidWork(data, companyId, workId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'date', 'workType', 'eventTitle', 'venue', 'rateMode', 'hasSubContract', 'billTotal', 'billReceived', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'date', 'callTime', 'workType', 'eventTitle', 'venue', 'studioName', 'studioWhatsApp', 'assignedStaffId', 'assignedStaffEmail', 'assignedStaffName', 'rateMode', 'mapsLink', 'hasSubContract', 'subContractorName', 'subContractorWA', 'subContractTotal', 'subContractPaid', 'billTotal', 'billReceived', 'gpayUtr', 'gpayScreenshot', 'notes', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == workId
-        && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
-        && data.date is string && data.date.size() <= 32
-        && optString(data, 'callTime', 32)
-        && data.workType is string && data.workType.size() >= 1 && data.workType.size() <= 160
-        && data.eventTitle is string && data.eventTitle.size() >= 1 && data.eventTitle.size() <= 200
-        && data.venue is string && data.venue.size() >= 1 && data.venue.size() <= 240
-        && optString(data, 'studioName', 160)
-        && optString(data, 'studioWhatsApp', 40)
-        && optString(data, 'assignedStaffId', 128)
-        && optString(data, 'assignedStaffEmail', 160)
-        && optString(data, 'assignedStaffName', 120)
-        && (data.rateMode == 'regular' || data.rateMode == 'half' || data.rateMode == 'own_camera' || data.rateMode == 'live_single_cam')
-        && optString(data, 'mapsLink', 500)
-        && data.hasSubContract is bool
-        && optString(data, 'subContractorName', 160)
-        && optString(data, 'subContractorWA', 40)
-        && optNumber(data, 'subContractTotal')
-        && optNumber(data, 'subContractPaid')
-        && data.billTotal is number && data.billTotal >= 0
-        && data.billReceived is number && data.billReceived >= 0
-        && optString(data, 'gpayUtr', 100)
-        && optString(data, 'gpayScreenshot', 120000)
-        && optString(data, 'notes', 1000)
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidLedger(data, companyId, ledgerId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'type', 'title', 'category', 'amount', 'date', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'type', 'title', 'category', 'amount', 'date', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == ledgerId
-        && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
-        && (data.type == 'income' || data.type == 'expense')
-        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
-        && data.category is string && data.category.size() >= 1 && data.category.size() <= 120
-        && data.amount is number && data.amount > 0 && data.amount <= 100000000
-        && data.date is string && data.date.size() <= 32
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidPayment(data, companyId, paymentId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'date', 'amount', 'mode', 'category', 'confirmationStatus', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'date', 'amount', 'mode', 'category', 'upiIdUsed', 'utr', 'note', 'screenshotUrl', 'confirmationStatus', 'confirmedAt', 'staffNote', 'issueReason', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == paymentId
-        && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
-        && isValidId(data.staffId)
-        && isValidEmail(data.staffEmail)
-        && data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120
-        && data.date is string && data.date.size() <= 32
-        && data.amount is number && data.amount > 0 && data.amount <= 10000000
+        && isNonEmptyString(data.staffName, 160)
+        && data.amount is number && data.amount >= 0 && data.amount <= 100000000
+        && isNonEmptyString(data.date, 32)
         && (data.mode == 'gpay' || data.mode == 'upi' || data.mode == 'bank' || data.mode == 'cash')
-        && (data.category == 'salary' || data.category == 'advance')
-        && optString(data, 'upiIdUsed', 120)
-        && optString(data, 'utr', 100)
-        && optString(data, 'note', 500)
-        && optString(data, 'screenshotUrl', 120000)
+        && (data.kind == 'advance' || data.kind == 'settlement')
         && (data.confirmationStatus == 'pending' || data.confirmationStatus == 'confirmed' || data.confirmationStatus == 'issue')
-        && optString(data, 'confirmedAt', 64)
-        && optString(data, 'staffNote', 400)
-        && optString(data, 'issueReason', 400)
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
+        && optString(data, 'screenshotUrl', 500000)
+        && isNonEmptyString(data.createdAt, 64);
     }
 
-    function isValidCustomer(data, companyId, customerId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'allowedStaffEmails', 'name', 'studioName', 'income', 'expense', 'received', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'allowedStaffEmails', 'name', 'studioName', 'whatsapp', 'workLocations', 'workDetails', 'income', 'expense', 'received', 'rulesAndTerms', 'addedByStaffName', 'addedByEmail', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == customerId
+    function isValidCustomer(data, docId) {
+      return data.keys().hasAll(['id', 'name', 'workRate', 'received', 'createdAt'])
+        && data.id == docId
         && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
-        && data.allowedStaffEmails is list
-        && data.allowedStaffEmails.size() <= 100
-        && (data.allowedStaffEmails.size() == 0 || data.allowedStaffEmails[0] is string)
-        && data.name is string && data.name.size() >= 1 && data.name.size() <= 160
-        && data.studioName is string && data.studioName.size() >= 1 && data.studioName.size() <= 160
-        && optString(data, 'whatsapp', 40)
-        && optString(data, 'workLocations', 240)
-        && optString(data, 'workDetails', 500)
-        && data.income is number && data.income >= 0
-        && data.expense is number && data.expense >= 0
+        && isNonEmptyString(data.name, 160)
+        && data.workRate is number && data.workRate >= 0
+        && optNumber(data, 'expense')
         && data.received is number && data.received >= 0
-        && optString(data, 'rulesAndTerms', 1000)
-        && optString(data, 'addedByStaffName', 120)
-        && optString(data, 'addedByEmail', 160)
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
+        && isNonEmptyString(data.createdAt, 64);
     }
 
-    function isValidExpense(data, companyId, expenseId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'date', 'title', 'amount', 'status', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'date', 'title', 'amount', 'billPhotoUrl', 'status', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == expenseId
+    function isValidWork(data, docId) {
+      return data.keys().hasAll(['id', 'eventTitle', 'date', 'venue', 'status', 'createdAt'])
+        && data.id == docId
         && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
+        && isNonEmptyString(data.eventTitle, 240)
+        && isNonEmptyString(data.date, 32)
+        && isNonEmptyString(data.venue, 240)
+        && (data.status == 'scheduled' || data.status == 'in_progress' || data.status == 'completed')
+        && isNonEmptyString(data.createdAt, 64);
+    }
+
+    function isValidSubcontract(data, docId) {
+      return data.keys().hasAll(['id', 'vendorName', 'workTitle', 'date', 'totalRate', 'paidAmount', 'createdAt'])
+        && data.id == docId
+        && isValidId(data.id)
+        && isNonEmptyString(data.vendorName, 160)
+        && isNonEmptyString(data.workTitle, 240)
+        && isNonEmptyString(data.date, 32)
+        && data.totalRate is number && data.totalRate >= 0
+        && data.paidAmount is number && data.paidAmount >= 0
+        && isNonEmptyString(data.createdAt, 64);
+    }
+
+    function isValidPunchLog(data, docId) {
+      return data.keys().hasAll(['id', 'staffId', 'staffName', 'type', 'date', 'punchInTime', 'status', 'dutyWage', 'createdAt'])
+        && data.id == docId
+        && isValidId(data.id)
         && isValidId(data.staffId)
-        && isValidEmail(data.staffEmail)
-        && data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120
-        && data.date is string && data.date.size() <= 32
-        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
-        && data.amount is number && data.amount > 0 && data.amount <= 10000000
-        && optString(data, 'billPhotoUrl', 120000)
+        && isNonEmptyString(data.staffName, 160)
+        && (data.type == 'login_selfie' || data.type == 'duty_punch')
+        && isNonEmptyString(data.date, 32)
+        && isNonEmptyString(data.punchInTime, 64)
+        && (data.status == 'active' || data.status == 'completed')
+        && data.dutyWage is number && data.dutyWage >= 0
+        && optString(data, 'selfieUrl', 500000)
+        && optString(data, 'departSelfieUrl', 500000)
+        && optString(data, 'arriveSelfieUrl', 500000)
+        && optString(data, 'punchOutSelfieUrl', 500000)
+        && optBool(data, 'workCompleted')
+        && optString(data, 'workCompletionNote', 1000)
+        && isNonEmptyString(data.createdAt, 64);
+    }
+
+    function isValidExpense(data, docId) {
+      return data.keys().hasAll(['id', 'staffId', 'staffName', 'description', 'amount', 'date', 'status', 'createdAt'])
+        && data.id == docId
+        && isValidId(data.id)
+        && isValidId(data.staffId)
+        && isNonEmptyString(data.staffName, 160)
+        && isNonEmptyString(data.description, 500)
+        && data.amount is number && data.amount >= 0
+        && isNonEmptyString(data.date, 32)
         && (data.status == 'pending' || data.status == 'approved' || data.status == 'rejected')
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
+        && optString(data, 'billPhotoUrl', 500000)
+        && isNonEmptyString(data.createdAt, 64);
     }
 
-    function isValidLeave(data, companyId, leaveId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'leaveType', 'date', 'reason', 'status', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'leaveType', 'date', 'reason', 'status', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == leaveId
+    function isValidInstruction(data, docId) {
+      return data.keys().hasAll(['id', 'staffId', 'staffName', 'message', 'acknowledged', 'createdAt'])
+        && data.id == docId
         && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
         && isValidId(data.staffId)
-        && isValidEmail(data.staffEmail)
-        && data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120
-        && (data.leaveType == 'Casual' || data.leaveType == 'Sick' || data.leaveType == 'Emergency')
-        && data.date is string && data.date.size() <= 32
-        && data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 500
-        && (data.status == 'pending' || data.status == 'approved' || data.status == 'rejected')
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidReceipt(data, companyId, receiptId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'date', 'imageUrl', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'date', 'note', 'imageUrl', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == receiptId
-        && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
-        && isValidId(data.staffId)
-        && isValidEmail(data.staffEmail)
-        && data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120
-        && data.date is string && data.date.size() <= 32
-        && optString(data, 'note', 400)
-        && data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 120000
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidInstruction(data, companyId, instructionId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'message', 'acknowledged', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'staffId', 'staffEmail', 'staffName', 'message', 'presetTag', 'acknowledged', 'acknowledgedAt', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == instructionId
-        && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
-        && isValidId(data.staffId)
-        && isValidEmail(data.staffEmail)
-        && data.staffName is string && data.staffName.size() >= 1 && data.staffName.size() <= 120
-        && data.message is string && data.message.size() >= 1 && data.message.size() <= 1000
-        && optString(data, 'presetTag', 80)
+        && isNonEmptyString(data.staffName, 160)
+        && isNonEmptyString(data.message, 1000)
         && data.acknowledged is bool
-        && optString(data, 'acknowledgedAt', 64)
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
+        && isNonEmptyString(data.createdAt, 64);
     }
 
-    function isValidNotification(data, companyId, notificationId) {
-      return data.keys().hasAll(['id', 'companyId', 'companyAdminEmail', 'type', 'title', 'message', 'timestamp', 'read', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'companyId', 'companyAdminEmail', 'type', 'title', 'message', 'timestamp', 'read', 'staffId', 'gpsLat', 'gpsLng', 'imageUrl', 'priority', 'createdByUid', 'createdAt', 'updatedAt'])
-        && data.id == notificationId
+    function isValidNotification(data, docId) {
+      return data.keys().hasAll(['id', 'targetRole', 'title', 'message', 'read', 'createdAt'])
+        && data.id == docId
         && isValidId(data.id)
-        && data.companyId == companyId
-        && isValidEmail(data.companyAdminEmail)
-        && (data.type == 'login' || data.type == 'punch_in' || data.type == 'punch_out' || data.type == 'attendance_edit' || data.type == 'expense' || data.type == 'leave' || data.type == 'receipt' || data.type == 'customer' || data.type == 'payment_confirmed' || data.type == 'payment_issue' || data.type == 'instruction_ack' || data.type == 'system')
-        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
-        && data.message is string && data.message.size() <= 1000
-        && data.timestamp is string && data.timestamp.size() <= 64
+        && (data.targetRole == 'company_admin' || data.targetRole == 'staff')
+        && isNonEmptyString(data.title, 240)
+        && isNonEmptyString(data.message, 1200)
         && data.read is bool
-        && optString(data, 'staffId', 128)
-        && optNumber(data, 'gpsLat')
-        && optNumber(data, 'gpsLng')
-        && optString(data, 'imageUrl', 120000)
-        && (!('priority' in data) || data.priority == 'normal' || data.priority == 'high')
-        && isValidId(data.createdByUid)
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
+        && isNonEmptyString(data.createdAt, 64);
     }
 
-    // =========================================================================
-    // COLLECTION 1: /admins/{adminId}
-    // =========================================================================
-    match /admins/{adminId} {
-      allow get: if isVerifiedUser()
-        && isValidId(adminId)
-        && (request.auth.uid == adminId || isMasterAdmin());
-      allow list: if isBootstrappedMasterAdmin();
-      allow create: if isVerifiedUser()
-        && isValidId(adminId)
-        && isValidAdminUser(incoming())
-        && hasValidCreateTimestamps(incoming())
-        && isMasterAdmin();
-      allow update: if isVerifiedUser()
-        && isValidId(adminId)
-        && isValidAdminUser(incoming())
-        && hasValidUpdateTimestamps(incoming())
-        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt'])
-        && isMasterAdmin();
-      allow delete: if isVerifiedUser() && isValidId(adminId) && isBootstrappedMasterAdmin();
+    function isValidLedger(data, docId) {
+      return data.keys().hasAll(['id', 'type', 'title', 'category', 'amount', 'date', 'createdAt'])
+        && data.id == docId
+        && isValidId(data.id)
+        && (data.type == 'income' || data.type == 'expense')
+        && isNonEmptyString(data.title, 240)
+        && isNonEmptyString(data.category, 160)
+        && data.amount is number && data.amount >= 0
+        && isNonEmptyString(data.date, 32)
+        && isNonEmptyString(data.createdAt, 64);
     }
 
-    // =========================================================================
-    // COLLECTION 2: /system/{configId}
-    // =========================================================================
-    match /system/{configId} {
-      allow get: if isVerifiedUser() && isValidId(configId) && isMasterAdmin();
-      allow list: if isBootstrappedMasterAdmin();
-      allow create: if isVerifiedUser()
-        && isValidId(configId)
-        && isValidMasterConfig(incoming())
-        && incoming().createdByUid == request.auth.uid
-        && hasValidCreateTimestamps(incoming())
-        && isMasterAdmin();
-      allow update: if isVerifiedUser()
-        && isValidId(configId)
-        && isValidMasterConfig(incoming())
-        && incoming().createdByUid == existing().createdByUid
-        && hasValidUpdateTimestamps(incoming())
-        && incoming().diff(existing()).affectedKeys().hasOnly(['brandName', 'supportEmail', 'updatedAt'])
-        && isMasterAdmin();
+    // Silent connection health probe document
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow write: if false;
+    }
+
+    // Platform super admin configuration
+    match /staff_online_config/{configId} {
+      allow get: if configId == 'super_admin';
+      allow create, update: if configId == 'super_admin' && isValidSuperAdminConfig(incoming());
       allow delete: if false;
     }
 
-    // =========================================================================
-    // COLLECTION 3: /memberships/{membershipId}
-    // =========================================================================
-    match /memberships/{membershipId} {
-      allow get: if isVerifiedUser()
-        && isValidId(membershipId)
-        && (
-          existing().email == userEmail()
-          || existing().companyAdminEmail == userEmail()
-          || isMasterAdmin()
-        );
-      allow list: if isBootstrappedMasterAdmin()
-        || (isVerifiedUser() && (resource.data.email == userEmail() || resource.data.companyAdminEmail == userEmail()));
-      allow create: if isVerifiedUser()
-        && isValidId(membershipId)
-        && isValidMembership(incoming(), membershipId)
-        && incoming().createdByUid == request.auth.uid
-        && hasValidCreateTimestamps(incoming())
-        && companyExistsAfter(incoming().companyId)
-        && (
-          isMasterAdmin()
-          || (
-            incoming().role == 'staff'
-            && isActiveCompanyAdmin(incoming().companyId)
-            && incoming().companyAdminEmail == userEmail()
-          )
-        );
-      allow update: if isVerifiedUser()
-        && isValidId(membershipId)
-        && isValidMembership(incoming(), membershipId)
-        && incoming().companyId == existing().companyId
-        && incoming().createdByUid == existing().createdByUid
-        && hasValidUpdateTimestamps(incoming())
-        && (
-          (
-            isMasterAdmin()
-            && incoming().diff(existing()).affectedKeys().hasOnly(['companySlug', 'companyName', 'companyActive', 'companyAdminEmail', 'email', 'active', 'updatedAt'])
-          )
-          || (
-            isActiveCompanyAdmin(existing().companyId)
-            && existing().role == 'staff'
-            && incoming().role == 'staff'
-            && incoming().companyAdminEmail == existing().companyAdminEmail
-            && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'active', 'updatedAt'])
-          )
-        );
-      allow delete: if isVerifiedUser()
-        && isValidId(membershipId)
-        && (
-          isMasterAdmin()
-          || (existing().role == 'staff' && isActiveCompanyAdmin(existing().companyId))
-        );
-    }
+    // Registered tenant companies and their isolated subcollections
+    match /staff_online_companies/{companyId} {
+      allow get: if isValidId(companyId);
+      allow list: if request.query.limit <= 500;
+      allow create, update: if isValidId(companyId) && isValidCompany(incoming(), companyId);
+      allow delete: if isValidId(companyId);
 
-    // =========================================================================
-    // COLLECTION 4: /companies/{companyId}
-    // =========================================================================
-    match /companies/{companyId} {
-      allow get: if isVerifiedUser()
-        && isValidId(companyId)
-        && (
-          isMasterAdmin()
-          || existing().adminEmail == userEmail()
-          || isActiveCompanyMember(companyId)
-        );
-      allow list: if isBootstrappedMasterAdmin()
-        || (isVerifiedUser() && resource.data.adminEmail == userEmail());
-      allow create: if isVerifiedUser()
-        && isValidId(companyId)
-        && isValidCompany(incoming(), companyId)
-        && incoming().createdByUid == request.auth.uid
-        && hasValidCreateTimestamps(incoming())
-        && isMasterAdmin();
-      allow update: if isVerifiedUser()
-        && isValidId(companyId)
-        && isValidCompany(incoming(), companyId)
-        && incoming().id == existing().id
-        && incoming().createdByUid == existing().createdByUid
-        && hasValidUpdateTimestamps(incoming())
-        && (
-          (
-            isMasterAdmin()
-            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'slug', 'tagline', 'address', 'phone', 'upi', 'badge', 'adminEmail', 'active', 'updatedAt'])
-          )
-          || (
-            isActiveCompanyAdmin(companyId)
-            && incoming().adminEmail == existing().adminEmail
-            && incoming().active == existing().active
-            && incoming().slug == existing().slug
-            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'tagline', 'address', 'phone', 'upi', 'badge', 'updatedAt'])
-          )
-        );
-      allow delete: if isVerifiedUser() && isValidId(companyId) && isMasterAdmin();
-
-      // =======================================================================
-      // SUBCOLLECTION 5: /companies/{companyId}/members/{memberKey}
-      // =======================================================================
-      match /members/{memberKey} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(memberKey)
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (memberKey == emailKey() && existing().email == userEmail())
-          );
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && resource.data.email == userEmail());
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(memberKey)
-          && isValidCompanyMember(incoming(), companyId, memberKey)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExistsAfter(companyId)
-          && (
-            isMasterAdmin()
-            || (incoming().role == 'staff' && isActiveCompanyAdmin(companyId))
-          );
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(memberKey)
-          && isValidCompanyMember(incoming(), companyId, memberKey)
-          && incoming().companyId == existing().companyId
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (
-            (
-              isMasterAdmin()
-              && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role', 'staffId', 'active', 'updatedAt'])
-            )
-            || (
-              isActiveCompanyAdmin(companyId)
-              && existing().role == 'staff'
-              && incoming().role == 'staff'
-              && incoming().diff(existing()).affectedKeys().hasOnly(['active', 'staffId', 'updatedAt'])
-            )
-          );
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(memberKey)
-          && (
-            isMasterAdmin()
-            || (existing().role == 'staff' && isActiveCompanyAdmin(companyId))
-          );
+      match /staff/{docId} {
+        allow get: if isValidId(companyId) && isValidId(docId);
+        allow list: if isValidId(companyId) && request.query.limit <= 1000;
+        allow create, update: if isValidId(companyId) && isValidId(docId) && isValidStaff(incoming(), docId);
+        allow delete: if isValidId(companyId) && isValidId(docId);
       }
 
-      // =======================================================================
-      // SUBCOLLECTION 6: /companies/{companyId}/staff/{staffId}
-      // =======================================================================
-      match /staff/{staffId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(staffId)
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && existing().email == userEmail())
-          );
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && (resource.data.companyAdminEmail == userEmail() || resource.data.email == userEmail()));
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(staffId)
-          && isValidStaff(incoming(), companyId, staffId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(staffId)
-          && isValidStaff(incoming(), companyId, staffId)
-          && incoming().companyId == existing().companyId
-          && incoming().companyAdminEmail == existing().companyAdminEmail
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId))
-          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'phone', 'email', 'upiId', 'dailyWage', 'salaryDay', 'emergencyContact', 'kycLast4', 'active', 'updatedAt']);
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(staffId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
+      match /advances/{docId} {
+        allow get: if isValidId(companyId) && isValidId(docId);
+        allow list: if isValidId(companyId) && request.query.limit <= 1000;
+        allow create, update: if isValidId(companyId) && isValidId(docId) && isValidAdvance(incoming(), docId);
+        allow delete: if isValidId(companyId) && isValidId(docId);
       }
 
-      // =======================================================================
-      // SUBCOLLECTION 7: /companies/{companyId}/attendance/{attendanceId}
-      // =======================================================================
-      match /attendance/{attendanceId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(attendanceId)
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && existing().staffEmail == userEmail())
-          );
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && (resource.data.companyAdminEmail == userEmail() || resource.data.staffEmail == userEmail()));
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(attendanceId)
-          && isValidAttendance(incoming(), companyId, attendanceId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && incoming().staffEmail == userEmail() && incoming().status == 'working')
-          );
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(attendanceId)
-          && isValidAttendance(incoming(), companyId, attendanceId)
-          && incoming().companyId == existing().companyId
-          && incoming().companyAdminEmail == existing().companyAdminEmail
-          && incoming().staffId == existing().staffId
-          && incoming().staffEmail == existing().staffEmail
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (
-            // Tier 1: Master Admin or Company Admin
-            (
-              (isMasterAdmin() || isActiveCompanyAdmin(companyId))
-              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'punchOutTime', 'rateMode', 'wageEarned', 'studioName', 'studioPhone', 'venue', 'fromLocation', 'toLocation', 'workNotes', 'gpsLat', 'gpsLng', 'gpsLabel', 'lastEditedBy', 'lastEditedAt', 'updatedAt'])
-            )
-            // Tier 2A: Staff Punch-Out own active shift
-            || (
-              isActiveCompanyStaff(companyId)
-              && existing().staffEmail == userEmail()
-              && existing().status == 'working'
-              && incoming().status == 'completed'
-              && incoming().wageEarned == existing().wageEarned
-              && incoming().rateMode == existing().rateMode
-              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'punchOutTime', 'gpsLat', 'gpsLng', 'updatedAt'])
-            )
-            // Tier 2B: Staff Edit own travel/venue notes (cannot alter wageEarned or rateMode)
-            || (
-              isActiveCompanyStaff(companyId)
-              && existing().staffEmail == userEmail()
-              && incoming().wageEarned == existing().wageEarned
-              && incoming().rateMode == existing().rateMode
-              && incoming().status == existing().status
-              && incoming().diff(existing()).affectedKeys().hasOnly(['studioName', 'venue', 'fromLocation', 'toLocation', 'workNotes', 'lastEditedBy', 'lastEditedAt', 'updatedAt'])
-            )
-          );
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(attendanceId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
+      match /customers/{docId} {
+        allow get: if isValidId(companyId) && isValidId(docId);
+        allow list: if isValidId(companyId) && request.query.limit <= 1000;
+        allow create, update: if isValidId(companyId) && isValidId(docId) && isValidCustomer(incoming(), docId);
+        allow delete: if isValidId(companyId) && isValidId(docId);
       }
 
-      // =======================================================================
-      // SUBCOLLECTION 8: /companies/{companyId}/works/{workId}
-      // =======================================================================
-      match /works/{workId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(workId)
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && existing().assignedStaffEmail == userEmail())
-          );
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && (resource.data.companyAdminEmail == userEmail() || resource.data.assignedStaffEmail == userEmail()));
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(workId)
-          && isValidWork(incoming(), companyId, workId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(workId)
-          && isValidWork(incoming(), companyId, workId)
-          && incoming().companyId == existing().companyId
-          && incoming().companyAdminEmail == existing().companyAdminEmail
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId))
-          && incoming().diff(existing()).affectedKeys().hasOnly(['date', 'callTime', 'workType', 'eventTitle', 'venue', 'studioName', 'studioWhatsApp', 'assignedStaffId', 'assignedStaffEmail', 'assignedStaffName', 'rateMode', 'mapsLink', 'hasSubContract', 'subContractorName', 'subContractorWA', 'subContractTotal', 'subContractPaid', 'billTotal', 'billReceived', 'gpayUtr', 'gpayScreenshot', 'notes', 'updatedAt']);
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(workId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
+      match /works/{docId} {
+        allow get: if isValidId(companyId) && isValidId(docId);
+        allow list: if isValidId(companyId) && request.query.limit <= 1000;
+        allow create, update: if isValidId(companyId) && isValidId(docId) && isValidWork(incoming(), docId);
+        allow delete: if isValidId(companyId) && isValidId(docId);
       }
 
-      // =======================================================================
-      // SUBCOLLECTION 9: /companies/{companyId}/ledger/{ledgerId}
-      // =======================================================================
-      match /ledger/{ledgerId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(ledgerId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && resource.data.companyAdminEmail == userEmail());
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(ledgerId)
-          && isValidLedger(incoming(), companyId, ledgerId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(ledgerId)
-          && isValidLedger(incoming(), companyId, ledgerId)
-          && incoming().companyId == existing().companyId
-          && incoming().companyAdminEmail == existing().companyAdminEmail
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId))
-          && incoming().diff(existing()).affectedKeys().hasOnly(['type', 'title', 'category', 'amount', 'date', 'updatedAt']);
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(ledgerId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
+      match /subcontracts/{docId} {
+        allow get: if isValidId(companyId) && isValidId(docId);
+        allow list: if isValidId(companyId) && request.query.limit <= 1000;
+        allow create, update: if isValidId(companyId) && isValidId(docId) && isValidSubcontract(incoming(), docId);
+        allow delete: if isValidId(companyId) && isValidId(docId);
       }
 
-      // =======================================================================
-      // SUBCOLLECTION 10: /companies/{companyId}/payments/{paymentId}
-      // =======================================================================
-      match /payments/{paymentId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(paymentId)
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && existing().staffEmail == userEmail())
-          );
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && (resource.data.companyAdminEmail == userEmail() || resource.data.staffEmail == userEmail()));
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(paymentId)
-          && isValidPayment(incoming(), companyId, paymentId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && incoming().confirmationStatus == 'pending'
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(paymentId)
-          && isValidPayment(incoming(), companyId, paymentId)
-          && incoming().companyId == existing().companyId
-          && incoming().companyAdminEmail == existing().companyAdminEmail
-          && incoming().staffId == existing().staffId
-          && incoming().staffEmail == existing().staffEmail
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (
-            // Tier 1: Master Admin or Company Admin override
-            (
-              (isMasterAdmin() || isActiveCompanyAdmin(companyId))
-              && incoming().diff(existing()).affectedKeys().hasOnly(['amount', 'mode', 'category', 'upiIdUsed', 'utr', 'note', 'screenshotUrl', 'confirmationStatus', 'confirmedAt', 'staffNote', 'issueReason', 'updatedAt'])
-            )
-            // Tier 2A: Staff confirms receipt (terminal state locking: cannot modify once 'confirmed')
-            || (
-              isActiveCompanyStaff(companyId)
-              && existing().staffEmail == userEmail()
-              && existing().confirmationStatus != 'confirmed'
-              && incoming().confirmationStatus == 'confirmed'
-              && incoming().amount == existing().amount
-              && incoming().diff(existing()).affectedKeys().hasOnly(['confirmationStatus', 'confirmedAt', 'staffNote', 'issueReason', 'updatedAt'])
-            )
-            // Tier 2B: Staff reports issue (only when not yet confirmed)
-            || (
-              isActiveCompanyStaff(companyId)
-              && existing().staffEmail == userEmail()
-              && existing().confirmationStatus != 'confirmed'
-              && incoming().confirmationStatus == 'issue'
-              && incoming().amount == existing().amount
-              && incoming().diff(existing()).affectedKeys().hasOnly(['confirmationStatus', 'issueReason', 'updatedAt'])
-            )
-          );
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(paymentId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
+      match /punchLogs/{docId} {
+        allow get: if isValidId(companyId) && isValidId(docId);
+        allow list: if isValidId(companyId) && request.query.limit <= 2000;
+        allow create, update: if isValidId(companyId) && isValidId(docId) && isValidPunchLog(incoming(), docId);
+        allow delete: if isValidId(companyId) && isValidId(docId);
       }
 
-      // =======================================================================
-      // SUBCOLLECTION 11: /companies/{companyId}/customers/{customerId}
-      // =======================================================================
-      match /customers/{customerId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(customerId)
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || isActiveCompanyStaff(companyId)
-          );
-        allow list: if isBootstrappedMasterAdmin()
-          || (
-            isVerifiedUser()
-            && (
-              resource.data.companyAdminEmail == userEmail()
-              || (
-                resource.data.allowedStaffEmails is list
-                && resource.data.allowedStaffEmails.size() <= 100
-                && userEmail() in resource.data.allowedStaffEmails
-              )
-            )
-          );
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(customerId)
-          && isValidCustomer(incoming(), companyId, customerId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (
-              isActiveCompanyStaff(companyId)
-              && incoming().income == 0
-              && incoming().expense == 0
-              && incoming().received == 0
-              && userEmail() in incoming().allowedStaffEmails
-            )
-          );
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(customerId)
-          && isValidCustomer(incoming(), companyId, customerId)
-          && incoming().companyId == existing().companyId
-          && incoming().companyAdminEmail == existing().companyAdminEmail
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId))
-          && incoming().diff(existing()).affectedKeys().hasOnly(['allowedStaffEmails', 'name', 'studioName', 'whatsapp', 'workLocations', 'workDetails', 'income', 'expense', 'received', 'rulesAndTerms', 'updatedAt']);
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(customerId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
+      match /expenses/{docId} {
+        allow get: if isValidId(companyId) && isValidId(docId);
+        allow list: if isValidId(companyId) && request.query.limit <= 1000;
+        allow create, update: if isValidId(companyId) && isValidId(docId) && isValidExpense(incoming(), docId);
+        allow delete: if isValidId(companyId) && isValidId(docId);
       }
 
-      // =======================================================================
-      // SUBCOLLECTION 12: /companies/{companyId}/expenses/{expenseId}
-      // =======================================================================
-      match /expenses/{expenseId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(expenseId)
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && existing().staffEmail == userEmail())
-          );
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && (resource.data.companyAdminEmail == userEmail() || resource.data.staffEmail == userEmail()));
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(expenseId)
-          && isValidExpense(incoming(), companyId, expenseId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && incoming().status == 'pending'
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && incoming().staffEmail == userEmail())
-          );
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(expenseId)
-          && isValidExpense(incoming(), companyId, expenseId)
-          && incoming().companyId == existing().companyId
-          && incoming().companyAdminEmail == existing().companyAdminEmail
-          && incoming().staffId == existing().staffId
-          && incoming().staffEmail == existing().staffEmail
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (
-            (isMasterAdmin() || isActiveCompanyAdmin(companyId))
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
-          );
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(expenseId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
+      match /instructions/{docId} {
+        allow get: if isValidId(companyId) && isValidId(docId);
+        allow list: if isValidId(companyId) && request.query.limit <= 1000;
+        allow create, update: if isValidId(companyId) && isValidId(docId) && isValidInstruction(incoming(), docId);
+        allow delete: if isValidId(companyId) && isValidId(docId);
       }
 
-      // =======================================================================
-      // SUBCOLLECTION 13: /companies/{companyId}/leaves/{leaveId}
-      // =======================================================================
-      match /leaves/{leaveId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(leaveId)
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && existing().staffEmail == userEmail())
-          );
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && (resource.data.companyAdminEmail == userEmail() || resource.data.staffEmail == userEmail()));
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(leaveId)
-          && isValidLeave(incoming(), companyId, leaveId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && incoming().status == 'pending'
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && incoming().staffEmail == userEmail())
-          );
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(leaveId)
-          && isValidLeave(incoming(), companyId, leaveId)
-          && incoming().companyId == existing().companyId
-          && incoming().companyAdminEmail == existing().companyAdminEmail
-          && incoming().staffId == existing().staffId
-          && incoming().staffEmail == existing().staffEmail
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (
-            (isMasterAdmin() || isActiveCompanyAdmin(companyId))
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
-          );
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(leaveId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
+      match /notifications/{docId} {
+        allow get: if isValidId(companyId) && isValidId(docId);
+        allow list: if isValidId(companyId) && request.query.limit <= 1000;
+        allow create, update: if isValidId(companyId) && isValidId(docId) && isValidNotification(incoming(), docId);
+        allow delete: if isValidId(companyId) && isValidId(docId);
       }
 
-      // =======================================================================
-      // SUBCOLLECTION 14: /companies/{companyId}/receipts/{receiptId}
-      // =======================================================================
-      match /receipts/{receiptId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(receiptId)
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && existing().staffEmail == userEmail())
-          );
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && (resource.data.companyAdminEmail == userEmail() || resource.data.staffEmail == userEmail()));
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(receiptId)
-          && isValidReceipt(incoming(), companyId, receiptId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && incoming().staffEmail == userEmail())
-          );
-        allow update: if false;
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(receiptId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
-      }
-
-      // =======================================================================
-      // SUBCOLLECTION 15: /companies/{companyId}/instructions/{instructionId}
-      // =======================================================================
-      match /instructions/{instructionId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(instructionId)
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || (isActiveCompanyStaff(companyId) && existing().staffEmail == userEmail())
-          );
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && (resource.data.companyAdminEmail == userEmail() || resource.data.staffEmail == userEmail()));
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(instructionId)
-          && isValidInstruction(incoming(), companyId, instructionId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && incoming().acknowledged == false
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(instructionId)
-          && isValidInstruction(incoming(), companyId, instructionId)
-          && incoming().companyId == existing().companyId
-          && incoming().companyAdminEmail == existing().companyAdminEmail
-          && incoming().staffId == existing().staffId
-          && incoming().staffEmail == existing().staffEmail
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (
-            (
-              (isMasterAdmin() || isActiveCompanyAdmin(companyId))
-              && incoming().diff(existing()).affectedKeys().hasOnly(['message', 'presetTag', 'acknowledged', 'acknowledgedAt', 'updatedAt'])
-            )
-            || (
-              isActiveCompanyStaff(companyId)
-              && existing().staffEmail == userEmail()
-              && existing().acknowledged == false
-              && incoming().acknowledged == true
-              && incoming().diff(existing()).affectedKeys().hasOnly(['acknowledged', 'acknowledgedAt', 'updatedAt'])
-            )
-          );
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(instructionId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
-      }
-
-      // =======================================================================
-      // SUBCOLLECTION 16: /companies/{companyId}/notifications/{notificationId}
-      // =======================================================================
-      match /notifications/{notificationId} {
-        allow get: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(notificationId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
-        allow list: if isBootstrappedMasterAdmin()
-          || (isVerifiedUser() && resource.data.companyAdminEmail == userEmail());
-        allow create: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(notificationId)
-          && isValidNotification(incoming(), companyId, notificationId)
-          && incoming().createdByUid == request.auth.uid
-          && hasValidCreateTimestamps(incoming())
-          && companyExists(companyId)
-          && incoming().companyAdminEmail == companyData(companyId).adminEmail
-          && (
-            isMasterAdmin()
-            || isActiveCompanyAdmin(companyId)
-            || isActiveCompanyStaff(companyId)
-          );
-        allow update: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(notificationId)
-          && isValidNotification(incoming(), companyId, notificationId)
-          && incoming().companyId == existing().companyId
-          && incoming().companyAdminEmail == existing().companyAdminEmail
-          && incoming().createdByUid == existing().createdByUid
-          && hasValidUpdateTimestamps(incoming())
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId))
-          && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt']);
-        allow delete: if isVerifiedUser()
-          && isValidId(companyId)
-          && isValidId(notificationId)
-          && (isMasterAdmin() || isActiveCompanyAdmin(companyId));
+      match /ledger/{docId} {
+        allow get: if isValidId(companyId) && isValidId(docId);
+        allow list: if isValidId(companyId) && request.query.limit <= 1000;
+        allow create, update: if isValidId(companyId) && isValidId(docId) && isValidLedger(incoming(), docId);
+        allow delete: if isValidId(companyId) && isValidId(docId);
       }
     }
   }
